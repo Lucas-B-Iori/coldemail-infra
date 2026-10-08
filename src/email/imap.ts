@@ -103,6 +103,19 @@ export async function markWarmupMessage(a: Account, messageId: string): Promise<
   });
 }
 
+/** Marca uma mensagem específica por UID como lida (\Seen) e opcionalmente com estrela (\Flagged). */
+export async function markMessageReadByUid(a: Account, uid: number, flag = false): Promise<void> {
+  return withImap(a, async (c) => {
+    const lock = await c.getMailboxLock('INBOX');
+    try {
+      await c.messageFlagsAdd([uid], ['\\Seen'], { uid: true });
+      if (flag) await c.messageFlagsAdd([uid], ['\\Flagged'], { uid: true });
+    } finally {
+      lock.release();
+    }
+  });
+}
+
 export interface InboxMessage {
   uid: number;
   parsed: ParsedMail;
