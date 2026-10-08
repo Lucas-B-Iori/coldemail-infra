@@ -80,3 +80,7 @@ export function addLog(l: {
     l.account_id, l.lead_id, l.queue_id, l.kind, l.event, l.detail?.slice(0, 2000), l.action, new Date().toISOString(),
   );
 }
+
+import { autoSeedFleetIfEmpty } from './autoSeed.ts';
+autoSeedFleetIfEmpty();
+
