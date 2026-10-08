@@ -1,0 +1,16 @@
+node_modules/
+data/
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.*
+!.env.example
+*.log
+accounts.csv
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dist/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,30 @@
+{
+  "name": "coldmail-engine",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Motor autônomo de warm-up e cold outreach (Dendrix)",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "cli": "node --disable-warning=ExperimentalWarning src/cli.ts",
+    "start": "node --disable-warning=ExperimentalWarning src/cli.ts run",
+    "init": "node --disable-warning=ExperimentalWarning src/cli.ts init",
+    "status": "node --disable-warning=ExperimentalWarning src/cli.ts status",
+    "dashboard": "node --disable-warning=ExperimentalWarning -e \"import { startDashboard } from './src/dashboard/server.ts'; startDashboard();\"",
+    "typecheck": "tsc --noEmit",
+    "verify": "node --disable-warning=ExperimentalWarning scripts/verify-accounts.ts"
+  },
+  "dependencies": {
+    "imapflow": "^1.0.0",
+    "mailparser": "^3.7.0",
+    "nodemailer": "^6.9.0"
+  },
+  "devDependencies": {
+    "@types/mailparser": "^3.4.0",
+    "@types/node": "^24.0.0",
+    "@types/nodemailer": "^6.4.0",
+    "typescript": "^5.6.0"
+  }
+}
