@@ -1,11 +1,11 @@
 import { getAccount, limitBounces, recordAccountError } from '../accounts/accounts.ts';
 import type { Account } from '../accounts/accounts.ts';
 import { addLog, q } from '../db/index.ts';
-import { fetchNewMessages, markMessageReadByUid } from '../email/imap.ts';
+import { fetchNewMessages } from '../email/imap.ts';
 import { cancelQueuedForLead } from '../outreach/leads.ts';
 import type { Lead } from '../outreach/leads.ts';
 import { config } from '../config.ts';
-import { addMs, chance, errMsg, log, nowIso, pLimit, tryLock, unlock } from '../lib/util.ts';
+import { addMs, errMsg, log, nowIso, pLimit, tryLock, unlock } from '../lib/util.ts';
 import { isAutoReply, isUnsubscribe, parseBounce, replyText } from './parse.ts';
 import type { InboxMessage } from '../email/imap.ts';
 
@@ -76,10 +76,7 @@ async function handleMessage(acc: Account, m: InboxMessage, fleet: Set<string>):
     );
   }
   lead ??= q.get<Lead>('SELECT * FROM leads WHERE email=?', from);
-  if (!lead) {
-    await handleNewsletterOrInbound(acc, m, from);
-    return 'ignored';
-  }
+  if (!lead) return 'ignored';
 
   if (isAutoReply(p)) {
     addLog({ account_id: acc.id, lead_id: lead.id, kind: 'info', event: 'auto_reply_ignored', detail: p.subject });
@@ -132,51 +129,4 @@ function registerBounce(acc: Account, b: ReturnType<typeof parseBounce>): void {
   }
   if (!matched) addLog({ account_id: acc.id, kind: b.type, event: 'bounce_unmatched', detail: `${b.recipients.join(',')} ${b.reason}` });
   limitBounces(acc); // circuit breaker: > MAX_BOUNCES_PER_DAY pausa a caixa
-}
-
-/**
- * Processa mensagens recebidas que não são de leads nem de caixas internas (ex: newsletters, confirmações de cadastro).
- * - Detecta links de confirmação (double opt-in) e ativa automaticamente via HTTP GET.
- * - Marca a mensagem como lida (\Seen) no IMAP e opcionalmente estrela (\Flagged) para manter o mailbox ativo e saudável.
- */
-async function handleNewsletterOrInbound(acc: Account, m: InboxMessage, from: string): Promise<void> {
-  const p = m.parsed;
-  const subject = p.subject || '';
-  const text = ((p.text || '') + ' ' + (p.html || '')).trim();
-
-  // 1. Auto-confirmação de opt-in (se houver link de confirmação no corpo)
-  const isConfirmation = /confirm|inscrição|cadastro|verifique|ativ|welcome|bem-vindo/i.test(subject + ' ' + text);
-  if (isConfirmation) {
-    const match = text.match(/https?:\/\/[^\s"'<>]+(?:confirm|subscribe|optin|verification|token|activate)[^\s"'<>]+/i);
-    if (match) {
-      const confirmUrl = match[0];
-      try {
-        await fetch(confirmUrl, { method: 'GET', signal: AbortSignal.timeout(10_000) });
-        log('inbox', `${acc.email}: opt-in confirmado automaticamente de ${from}`);
-        addLog({
-          account_id: acc.id,
-          kind: 'info',
-          event: 'newsletter_confirmed',
-          detail: `${from} | ${confirmUrl.slice(0, 100)}`,
-        });
-      } catch (err) {
-        log('inbox', `Aviso ao auto-confirmar link: ${errMsg(err)}`);
-      }
-    }
-  }
-
-  // 2. Marca como lida no IMAP (\Seen) e adiciona flag com 15% de chance
-  try {
-    const flag = chance(0.15);
-    await markMessageReadByUid(acc, m.uid, flag);
-    log('inbox', `${acc.email}: inbound/newsletter de ${from} lida${flag ? ' ★' : ''}`);
-    addLog({
-      account_id: acc.id,
-      kind: 'info',
-      event: 'newsletter_read',
-      detail: `${from} | "${subject.slice(0, 60)}"`,
-    });
-  } catch (err) {
-    // Erro não-crítico
-  }
 }
