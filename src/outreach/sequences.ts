@@ -44,7 +44,7 @@ Posso enviar o vídeo?`,
     subject: 'Re: publicações do escritório',
     body: `{{first_name}}, talvez avaliar um sistema agora não seja prioridade por aí.
 
-Se vocês já usam outra ferramenta, o vídeo também serve para comparar uma rotina específica, sem compromisso algum.
+Se vocês já usam outra ferramenta, o vídeo serve apenas para comparar como organizamos essa rotina.
 
 Quer receber o exemplo ou prefere que eu encerre o contato por aqui para não ocupar sua caixa?`,
   },
@@ -82,8 +82,9 @@ export const DEFAULT_SEQUENCES = {
 export function seedSequences(): void {
   tx(() => {
     for (const [name, s] of Object.entries(DEFAULT_SEQUENCES)) {
-      if (q.get('SELECT id FROM sequences WHERE name=?', name)) continue;
-      const id = q.run('INSERT INTO sequences (name, description) VALUES (?,?)', name, s.description).id;
+      const existing = q.get<{ id: number }>('SELECT id FROM sequences WHERE name=?', name);
+      const id = existing ? existing.id : q.run('INSERT INTO sequences (name, description) VALUES (?,?)', name, s.description).id;
+      q.run('DELETE FROM sequence_steps WHERE sequence_id=?', id);
       s.steps.forEach((st, i) =>
         q.run(
           `INSERT INTO sequence_steps (sequence_id, step_number, delay_days, reply_in_thread, subject_template, body_template)
