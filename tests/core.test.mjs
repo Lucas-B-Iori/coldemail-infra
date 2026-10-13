@@ -866,4 +866,95 @@ test("missing requested source fails after stream drain without advancing cursor
     10,
   );
 });
+function warmupDsnFixture(id, status, original) {
+  ImapFlow.prototype.list = async () => [];
+  ImapFlow.prototype.getMailboxLock = async function () {
+    this.mailbox = { uidValidity: 20n };
+    return { release() {} };
+  };
+  ImapFlow.prototype.search = async () => [20];
+  ImapFlow.prototype.fetch = async function* () {
+    yield {
+      uid: 20,
+      source: Buffer.from(
+        `Message-ID: <${id}@invalid>\r\nFrom: mailer-daemon@invalid.test\r\nSubject: Delivery failed\r\n\r\nFinal-Recipient: rfc822; test1@example.invalid\r\nOriginal-Message-ID: ${original}\r\nStatus: ${status}\r\nDiagnostic-Code: smtp; ${status} ${status.startsWith("5.7") ? "message blocked by reputation policy" : "No such user"}`,
+      ),
+    };
+  };
+}
+test("matched warmup permanent DSN closes its thread without cold bounce counters", async () => {
+  reset();
+  q.run("DELETE FROM imap_cursors");
+  q.run("UPDATE accounts SET bounces_today=0");
+  const t = thread();
+  warmupDsnFixture("warmup-permanent", "5.1.1", "<warm@invalid>");
+  await pollAccount(getAccount(2));
+  assert.equal(
+    q.get("SELECT status FROM warmup_threads WHERE id=?", t).status,
+    "closed",
+  );
+  assert.equal(
+    q.get("SELECT imap_status FROM warmup_messages").imap_status,
+    "not_found",
+  );
+  assert.equal(getAccount(2).bounces_today, 0);
+  assert.equal(
+    q.get(`SELECT count(*) n FROM bounces_and_logs WHERE event='warmup_bounce'`)
+      .n,
+    1,
+  );
+});
+test("matched warmup reputation DSN applies sender cooldown", async () => {
+  reset();
+  q.run("DELETE FROM imap_cursors");
+  q.run("UPDATE accounts SET bounces_today=0,throttle_count=0");
+  thread();
+  warmupDsnFixture("warmup-policy", "5.7.26", "<warm@invalid>");
+  await pollAccount(getAccount(2));
+  assert.ok(getAccount(2).cooldown_until);
+  assert.equal(getAccount(2).throttle_count, 1);
+  assert.equal(getAccount(2).bounces_today, 0);
+});
+test("unmatched fleet-recipient DSN logs evidence without guessing a warmup thread", async () => {
+  reset();
+  q.run("DELETE FROM imap_cursors");
+  q.run("UPDATE accounts SET bounces_today=0");
+  const t = thread();
+  warmupDsnFixture("warmup-unknown", "5.7.26", "<unknown@invalid>");
+  await pollAccount(getAccount(2));
+  assert.equal(
+    q.get(
+      `SELECT count(*) n FROM bounces_and_logs WHERE event='warmup_bounce_unmatched'`,
+    ).n,
+    1,
+  );
+  assert.equal(
+    q.get("SELECT status FROM warmup_threads WHERE id=?", t).status,
+    "open",
+  );
+  assert.equal(getAccount(2).cooldown_until, null);
+  assert.equal(getAccount(2).bounces_today, 0);
+});
+test("matched temporary warmup DSN preserves pending receipt and thread", async () => {
+  reset();
+  q.run("DELETE FROM imap_cursors");
+  q.run("UPDATE accounts SET bounces_today=0");
+  const t = thread();
+  warmupDsnFixture("warmup-delayed", "4.2.2", "<warm@invalid>");
+  await pollAccount(getAccount(2));
+  assert.equal(
+    q.get("SELECT status FROM warmup_threads WHERE id=?", t).status,
+    "open",
+  );
+  assert.equal(
+    q.get("SELECT imap_status FROM warmup_messages").imap_status,
+    "unread",
+  );
+  assert.equal(getAccount(2).bounces_today, 0);
+  assert.equal(
+    q.get(`SELECT count(*) n FROM bounces_and_logs WHERE event='warmup_bounce'`)
+      .n,
+    1,
+  );
+});
 test.after(() => db.close());

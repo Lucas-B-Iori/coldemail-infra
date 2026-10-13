@@ -3,6 +3,7 @@ import {
   getAccount,
   limitBounces,
   recordAccountError,
+  refreshWarmupHealth,
 } from "../accounts/accounts.ts";
 import type { Account } from "../accounts/accounts.ts";
 import { addLog, q, tx } from "../db/index.ts";
@@ -121,9 +122,13 @@ async function handleMessage(
   // 1) Bounce / DSN
   const b = parseBounce(p, fleet);
   if (b.isBounce) {
-    // ignora DSNs de warm-up entre caixas da própria frota
-    if (b.recipients.length && b.recipients.every((r) => fleet.has(r)))
-      return "ignored";
+    const warmupRecipients = b.recipients.filter((recipient) =>
+      fleet.has(recipient),
+    );
+    if (warmupRecipients.length)
+      registerWarmupBounce(acc, m, b, warmupRecipients);
+    if (b.recipients.length && warmupRecipients.length === b.recipients.length)
+      return "bounce";
     registerBounce(acc, b);
     return "bounce";
   }
@@ -274,4 +279,95 @@ function inboxMessageKey(message: InboxMessage): string {
     })),
   });
   return `sha256:${createHash("sha256").update(stableContent).digest("hex")}`;
+}
+
+function registerWarmupBounce(
+  sender: Account,
+  message: InboxMessage,
+  bounce: ReturnType<typeof parseBounce>,
+  recipients: string[],
+): void {
+  const mail = message.parsed;
+  const refs = new Set<string>([
+    ...(mail.inReplyTo ? [mail.inReplyTo] : []),
+    ...(Array.isArray(mail.references)
+      ? mail.references
+      : mail.references
+        ? [mail.references]
+        : []),
+  ]);
+  const originalHeaders = [
+    mail.text ?? "",
+    ...mail.attachments
+      .filter((attachment) =>
+        /delivery-status|message\/rfc822|text\/rfc822-headers/i.test(
+          attachment.contentType,
+        ),
+      )
+      .map((attachment) => attachment.content.toString("utf8")),
+  ];
+  for (const text of originalHeaders) {
+    for (const match of text.matchAll(
+      /^(?:Original-)?Message-ID:\s*(<[^>\r\n]+>)/gim,
+    ))
+      refs.add(match[1]);
+  }
+  const matches = refs.size
+    ? q.all<{ id: number; thread_id: number; message_id: string }>(
+        `SELECT m.id,m.thread_id,m.message_id FROM warmup_messages m
+     JOIN accounts recipient ON recipient.id=m.to_account_id
+     WHERE m.from_account_id=? AND lower(recipient.email) IN (${recipients.map(() => "?").join(",")})
+       AND m.message_id IN (${[...refs].map(() => "?").join(",")})`,
+        sender.id,
+        ...recipients,
+        ...refs,
+      )
+    : [];
+  const permanent = bounce.type === "hard" || bounce.status?.startsWith("5");
+  tx(() => {
+    for (const match of matches) {
+      if (permanent) {
+        q.run(
+          `UPDATE warmup_messages SET imap_status='not_found',read_at=NULL WHERE id=?`,
+          match.id,
+        );
+        q.run(
+          `UPDATE warmup_threads SET status='closed',next_actor_id=NULL,reply_due_at=NULL,updated_at=? WHERE id=?`,
+          nowIso(),
+          match.thread_id,
+        );
+      }
+      addLog({
+        account_id: sender.id,
+        kind: bounce.type,
+        event: "warmup_bounce",
+        detail: `${match.message_id} | ${recipients.join(",")} | ${bounce.status ?? ""} ${bounce.reason}`,
+        action: permanent
+          ? "failed warmup delivery; thread closed"
+          : "temporary DSN; receipt remains pending",
+      });
+    }
+    if (!matches.length)
+      addLog({
+        account_id: sender.id,
+        kind: bounce.type,
+        event: "warmup_bounce_unmatched",
+        detail: `${recipients.join(",")} | ${bounce.status ?? ""} ${bounce.reason}`,
+        action:
+          "recorded only; original engine message could not be identified",
+      });
+  });
+  if (
+    matches.length &&
+    /5\.7\.|blocked|spam|reputation|policy|blacklist|denied/i.test(
+      `${bounce.status ?? ""} ${bounce.reason}`,
+    )
+  ) {
+    recordAccountError(
+      getAccount(sender.id) ?? sender,
+      "throttle",
+      `Warmup DSN: ${bounce.status ?? ""} ${bounce.reason}`,
+    );
+  }
+  if (matches.length) refreshWarmupHealth();
 }
