@@ -807,4 +807,63 @@ test("warmup peer capacity is revalidated after asynchronous drafting", async ()
   await tickWarmup();
   assert.equal(sends, 0);
 });
+test("unsolicited FETCH flags notifications do not abort full source processing", async () => {
+  reset();
+  q.run("DELETE FROM imap_cursors");
+  ImapFlow.prototype.list = async () => [];
+  ImapFlow.prototype.getMailboxLock = async function () {
+    this.mailbox = { uidValidity: 15n };
+    return { release() {} };
+  };
+  ImapFlow.prototype.search = async () => [11, 12];
+  const source = Buffer.from(
+    "From: unknown@example.invalid\r\nSubject: Review\r\n\r\nHello",
+  );
+  ImapFlow.prototype.fetch = async function* () {
+    yield { seq: 2, flags: new Set(["\\Seen"]) };
+    yield { uid: 11, source };
+    yield { uid: 12, flags: new Set(["\\Seen"]) };
+    yield { uid: 12, source };
+    yield { uid: 999, source };
+  };
+  const { fetchNewMessages } = await import("../src/email/imap.ts");
+  const result = await fetchNewMessages(getAccount(1), 0);
+  assert.deepEqual(
+    result.messages.map((m) => m.uid),
+    [11, 12],
+  );
+  assert.equal(result.maxUid, 12);
+  assert.equal(result.cursors[0].lastUid, 12);
+});
+test("missing requested source fails after stream drain without advancing cursor", async () => {
+  reset();
+  q.run("DELETE FROM imap_cursors");
+  q.run(
+    `INSERT INTO imap_cursors(account_id,mailbox,uid_validity,last_uid) VALUES(1,'INBOX','15',10)`,
+  );
+  ImapFlow.prototype.search = async () => [11, 12];
+  let drained = false;
+  ImapFlow.prototype.fetch = async function* () {
+    yield {
+      uid: 11,
+      source: Buffer.from(
+        "From: unknown@example.invalid\r\nSubject: Review\r\n\r\nHello",
+      ),
+    };
+    yield { seq: 3, flags: new Set(["\\Seen"]) };
+    drained = true;
+  };
+  const { fetchNewMessages } = await import("../src/email/imap.ts");
+  await assert.rejects(
+    fetchNewMessages(getAccount(1), 10),
+    /requested UIDs: 12/,
+  );
+  assert.equal(drained, true);
+  assert.equal(
+    q.get(
+      `SELECT last_uid FROM imap_cursors WHERE account_id=1 AND mailbox='INBOX'`,
+    ).last_uid,
+    10,
+  );
+});
 test.after(() => db.close());

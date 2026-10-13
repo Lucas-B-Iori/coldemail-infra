@@ -166,17 +166,26 @@ export async function fetchNewMessages(
           .sort((x, y) => x - y)
           .slice(0, max);
         let consumed = previous;
+        const pending = new Set(uids);
         if (uids.length)
           for await (const m of c.fetch(
             uids,
             { uid: true, source: true },
             { uid: true },
           )) {
-            if (!m.source)
-              throw new Error(`IMAP source missing: ${path}/${m.uid}`);
+            // Servers may interleave unsolicited FLAGS-only FETCH notifications.
+            // Drain those updates; only complete requested UID bodies count as fetched.
+            if (!pending.has(m.uid) || !Buffer.isBuffer(m.source)) continue;
             messages.push({ uid: m.uid, parsed: await simpleParser(m.source) });
+            pending.delete(m.uid);
             consumed = Math.max(consumed, m.uid);
           }
+        // An incomplete requested message must remain retryable on the next poll.
+        // Throw before returning any mailbox cursor so higher UIDs cannot hide a gap.
+        if (pending.size)
+          throw new Error(
+            `IMAP source missing after FETCH: ${path}; requested UIDs: ${[...pending].join(",")}`,
+          );
         cursors.push({
           mailbox: path,
           uidValidity: validity,
