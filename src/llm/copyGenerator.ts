@@ -1,11 +1,16 @@
-import { chatJson } from './client.ts';
+import { chatJson, isRecord, nonEmptyString } from './client.ts';
 import type { Lead } from '../outreach/leads.ts';
-import { firstName, lintEmail } from '../outreach/templates.ts';
+import { firstName, lintEmail, renderTemplate, withOptOut, OPT_OUT } from '../outreach/templates.ts';
 import { log } from '../lib/util.ts';
 
 export interface GeneratedCopy {
   subject: string;
   body: string;
+}
+
+export interface CopyTemplate {
+  subject_template: string;
+  body_template: string;
 }
 
 export interface ReplyClassification {
@@ -35,6 +40,7 @@ export async function generateAdaptiveCopy(
   lead: Lead,
   stepNumber: number,
   senderName: string,
+  selectedTemplate?: CopyTemplate,
 ): Promise<GeneratedCopy> {
   const fName = firstName(lead.name);
   const firm = lead.firm_name || 'seu escritório';
@@ -54,6 +60,8 @@ REGRAS INEGOCIÁVEIS (SANTO GRAAL DO COLD MAIL):
 4. Foco no cliente: Comece falando sobre a rotina/situação do escritório, nunca sobre "eu desenvolvi" ou "nossa empresa".
 5. CTA Suave: Termine sempre com uma pergunta simples de baixo atrito pedindo permissão para mandar um vídeo de 90 segundos mostrando a rotina com dados fictícios.
 6. Linguagem: Português do Brasil, tom profissional, sóbrio e respeitoso (conforme Provimento 205 da OAB, sem promessas absurdas de nunca perder prazos).
+7. Inclua sempre esta opção de descadastro: "${OPT_OUT}". O limite de palavras inclui essa frase.
+8. Se houver um template da sequência selecionada, preserve sua intenção e CTA; ele tem precedência sobre as instruções genéricas de toque.
 
 Retorne SEMPRE um JSON válido com os campos:
 {
@@ -99,8 +107,12 @@ Objetivo: Encerrar com gentileza para desocupar a caixa de entrada. Dizer que ta
 Manter no máximo 35 a 50 palavras. Sem links. Sem travessões.`;
   }
 
+  if (selectedTemplate) {
+    userPrompt = `Personalize o template da sequência selecionada, preservando assunto, intenção, contexto e CTA. Não invente contato anterior além do template. Remetente: ${senderName}.\nAssunto: ${renderTemplate(selectedTemplate.subject_template, lead)}\nCorpo: ${renderTemplate(selectedTemplate.body_template, lead)}\nInclua: ${OPT_OUT}`;
+  }
+
   try {
-    const res = await chatJson<GeneratedCopy>(
+    const res = await chatJson<unknown>(
       [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
@@ -108,15 +120,20 @@ Manter no máximo 35 a 50 palavras. Sem links. Sem travessões.`;
       0.7,
     );
 
+    if (!isRecord(res) || !nonEmptyString(res.subject) || !nonEmptyString(res.body)) throw new Error('Copy com schema inválido');
+    if (/[\r\n\x00-\x1f\x7f]/.test(res.subject)) throw new Error('Assunto contém caracteres de controle');
+    const originalProblem = lintEmail(res.subject, res.body, stepNumber);
+    if (originalProblem) throw new Error(`Copy inválida: ${originalProblem}`);
+
     // Sanitização rigorosa pós-IA
     let cleanSubject = (res.subject || 'publicações do escritório')
       .replace(/[—–]/g, '-')
       .replace(/["']/g, '')
       .trim();
-    let cleanBody = (res.body || '')
+    let cleanBody = withOptOut(res.body
       .replace(/[—–]/g, '')
       .replace(/\r\n/g, '\n')
-      .trim();
+      .trim());
 
     // Validação de segurança de entrega
     const lintErr = lintEmail(cleanSubject, cleanBody, stepNumber);
@@ -129,7 +146,20 @@ Manter no máximo 35 a 50 palavras. Sem links. Sem travessões.`;
   }
 
   // Fallback seguro baseado nos modelos oficiais do relatório
-  return getFallbackCopy(lead, stepNumber, senderName);
+  if (selectedTemplate) {
+    const rendered = {
+      subject: renderTemplate(selectedTemplate.subject_template, lead).trim(),
+      body: withOptOut(renderTemplate(selectedTemplate.body_template, lead)),
+    };
+    const problem = lintEmail(rendered.subject, rendered.body, stepNumber);
+    if (problem) throw new Error(`Template da sequência inválido: ${problem}`);
+    return rendered;
+  }
+  const fallback = getFallbackCopy(lead, stepNumber, senderName);
+  fallback.body = withOptOut(fallback.body);
+  const problem = lintEmail(fallback.subject, fallback.body, stepNumber);
+  if (problem) throw new Error(`Fallback inválido: ${problem}`);
+  return fallback;
 }
 
 /** Fallback baseado nos modelos validados da pesquisa */
@@ -206,13 +236,19 @@ Retorne JSON:
 }`;
 
   try {
-    return await chatJson<ReplyClassification>(
+    const result = await chatJson<unknown>(
       [
         { role: 'system', content: 'Você é um classificador e copiloto comercial experiente em B2B jurídico.' },
         { role: 'user', content: prompt },
       ],
       0.3,
     );
+    const intents: ReplyClassification['intent'][] = ['manda_video', 'quanto_custa', 'vamos_marcar', 'ja_usa_outro', 'agora_nao', 'sem_interesse', 'outro_responsavel', 'out_of_office', 'outros'];
+    if (!isRecord(result) || typeof result.intent !== 'string' || !intents.includes(result.intent as ReplyClassification['intent']) ||
+        !nonEmptyString(result.reasoning) || !nonEmptyString(result.suggestedReply) || result.reasoning.length > 1000 || result.suggestedReply.length > 2000) {
+      throw new Error('Classificação com schema inválido');
+    }
+    return { intent: result.intent as ReplyClassification['intent'], reasoning: result.reasoning.trim(), suggestedReply: result.suggestedReply.trim() };
   } catch {
     return {
       intent: 'outros',

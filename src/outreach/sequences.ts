@@ -1,5 +1,5 @@
 import { q, tx } from '../db/index.ts';
-import { lintEmail, renderTemplate } from './templates.ts';
+import { lintEmail, renderTemplate, withOptOut } from './templates.ts';
 
 interface SeedStep {
   delay_days: number;
@@ -75,16 +75,16 @@ Se fizer mais sentido, posso te ligar rapidamente em vez de trocar mensagens. {�
 ];
 
 export const DEFAULT_SEQUENCES = {
-  dendrix_main: { description: 'Cadência fria principal (5 toques)', steps: MAIN },
-  dendrix_nurture: { description: 'Reativação de leads que responderam e sumiram', steps: NURTURE },
+  dendrix_main: { description: 'Cadência fria principal (3 toques)', steps: MAIN.map(st => ({...st, body: withOptOut(st.body)})) },
+  dendrix_nurture: { description: 'Reativação de leads que responderam e sumiram', steps: NURTURE.map(st => ({...st, body: withOptOut(st.body)})) },
 };
 
 export function seedSequences(): void {
   tx(() => {
     for (const [name, s] of Object.entries(DEFAULT_SEQUENCES)) {
       const existing = q.get<{ id: number }>('SELECT id FROM sequences WHERE name=?', name);
-      const id = existing ? existing.id : q.run('INSERT INTO sequences (name, description) VALUES (?,?)', name, s.description).id;
-      q.run('DELETE FROM sequence_steps WHERE sequence_id=?', id);
+      if (existing) continue; // Templates existentes podem ter sido personalizados pelo operador.
+      const id = q.run('INSERT INTO sequences (name, description) VALUES (?,?)', name, s.description).id;
       s.steps.forEach((st, i) =>
         q.run(
           `INSERT INTO sequence_steps (sequence_id, step_number, delay_days, reply_in_thread, subject_template, body_template)

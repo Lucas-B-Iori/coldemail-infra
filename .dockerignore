@@ -1,4 +1,12 @@
 node_modules
+accounts.csv
+data
+audit
+tests
+.env.*
+!.env.example
+*.zip
+*.tar.gz
 data/*.db
 data/*.db-wal
 data/*.db-shm

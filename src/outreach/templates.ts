@@ -45,12 +45,22 @@ export function signature(a: Pick<Account, 'display_name'>): string {
 const URL_RE = /(https?:\/\/|www\.|wa\.me|bit\.ly|\b[a-z0-9-]+\.(com|com\.br|net|org|io|app|adv\.br|br)\b)/i;
 const SPAM_RE = /(grátis|gratis|100% |garantido|clique aqui|oferta imperdível|últimas vagas|promoção|ganhe dinheiro|sem compromisso algum)/i;
 
+export const OPT_OUT = 'Se preferir não receber mais mensagens, basta me avisar.';
+
+export function withOptOut(body: string): string {
+  return body.includes(OPT_OUT) ? body.trim() : `${body.trim()}\n\n${OPT_OUT}`;
+}
+
 /**
  * Trava de segurança de entregabilidade. Retorna a descrição do problema ou null se OK.
  * - Toque 1: nenhum link/domínio.
  * - Nunca enviar placeholder não resolvido.
  */
-export function lintEmail(subject: string, body: string, step: number): string | null {
+export function lintEmail(subject: unknown, body: unknown, step: number): string | null {
+  if (typeof subject !== 'string' || !subject.trim()) return 'assunto vazio ou inválido';
+  if (typeof body !== 'string' || body.trim().length < 10 || body.trim().split(/\s+/).length < 3) return 'corpo vazio ou inválido';
+  if (/[\r\n\x00-\x1f\x7f]/.test(subject)) return 'caractere de controle no assunto';
+  if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(body)) return 'caractere de controle no corpo';
   if (/\{\{|\}\}/.test(subject + body)) return 'placeholder não resolvido';
   if (step === 1 && URL_RE.test(subject + ' ' + body)) return 'link/domínio no toque 1 (proibido)';
   if (SPAM_RE.test(subject + ' ' + body)) return 'termo promocional/spam';

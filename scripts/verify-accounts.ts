@@ -68,5 +68,5 @@ for (const a of accounts) {
 console.log(`Resumo: SMTP ${okSmtp}/${accounts.length} | IMAP ${okImap}/${accounts.length}`);
 if (okSmtp === accounts.length && !values['smtp-only'] && okImap < accounts.length)
   console.log('⚠ SMTP ok mas IMAP falhou: sem IMAP o warm-up não marca como lido e o circuit breaker de bounces fica cego.');
-process.exit(okSmtp === accounts.length ? 0 : 1);
+process.exit(okSmtp === accounts.length && (values['smtp-only'] || okImap === accounts.length) ? 0 : 1);
 

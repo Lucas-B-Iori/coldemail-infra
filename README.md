@@ -1,5 +1,7 @@
 # Cold Outreach & Warm-up Engine (Dendrix)
 
+> Atualização de confiabilidade de 13/10/2026: consulte [OPERACAO.md](OPERACAO.md) para o comportamento atual, acesso ao painel, dias saudáveis, testes e backup. As seções antigas abaixo registram a implementação anterior; datas de promoção e afirmações sobre OAuth sem suporte foram substituídas.
+
 Motor próprio, local/VPS, **Node.js 22+ / TypeScript**, SQLite embutido. Sem SaaS, sem Apps Script.
 
 ## Por que esta stack
