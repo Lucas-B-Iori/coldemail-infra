@@ -21,13 +21,13 @@ export const config = {
   warmupWindow: { start: int('WARMUP_WINDOW_START', 8), end: int('WARMUP_WINDOW_END', 20) },
 
   llm: {
-    baseUrl: str('LLM_BASE_URL', 'https://api.deepseek.com').replace(/\/$/, ''),
+    baseUrl: str('LLM_BASE_URL', 'https://openrouter.ai/api/v1').replace(/\/$/, ''),
     apiKey: str('LLM_API_KEY'),
-    model: str('LLM_MODEL', 'deepseek-chat'),
+    model: str('LLM_MODEL', 'deepseek/deepseek-chat'),
   },
 
   signature: {
-    role: str('SIGNATURE_ROLE', 'Fundador | Dendrix'),
+    role: str('SIGNATURE_ROLE', ''),
     phone: str('SIGNATURE_PHONE', ''),
   },
 
@@ -40,6 +40,40 @@ export const config = {
     tenantId: str('M365_TENANT_ID'),
     clientId: str('M365_CLIENT_ID'),
     clientSecret: str('M365_CLIENT_SECRET'),
+  },
+
+  /**
+   * Microsoft Graph (client credentials, escopo graph.microsoft.com/.default). Usa AZURE_*; se ausente, cai para M365_*.
+   */
+  graph: {
+    tenantId: str('AZURE_TENANT_ID', str('M365_TENANT_ID')),
+    clientId: str('AZURE_CLIENT_ID', str('M365_CLIENT_ID')),
+    clientSecret: str('AZURE_CLIENT_SECRET', str('M365_CLIENT_SECRET')),
+  },
+  /** Transporte das caixas M365 (auth_mode=oauth): graph (recomendado) ou smtp (legado XOAUTH2). Gmail sempre SMTP. */
+  sendTransport: (str('SEND_TRANSPORT', 'smtp') === 'graph' ? 'graph' : 'smtp') as 'graph' | 'smtp',
+  /** template = usa a sequência do banco (determinístico); ai = IA reescreve com base no template (fallback no template). */
+  copyMode: (str('COPY_MODE', 'ai') === 'template' ? 'template' : 'ai') as 'ai' | 'template',
+  /** Valor do site, só para a copy. */
+  sitePrice: str('SITE_PRICE', 'R$1.000'),
+
+  /**
+   * Rampa de cold independente do warm-up. Se COLD_START_DATE (YYYY-MM-DD, fuso TZ_NAME) estiver definido,
+   * o cold começa nessa data: COLD_START_PER_DAY/dia por caixa, +COLD_STEP a cada COLD_STEP_DAYS, até COLD_MAX_PER_DAY.
+   * O warm-up continua rodando em paralelo. Sem COLD_START_DATE vale a rampa legada (cold só após 21 dias).
+   */
+  coldRamp: {
+    startDate: str('COLD_START_DATE', ''),
+    startPerDay: int('COLD_START_PER_DAY', 10),
+    step: int('COLD_STEP', 5),
+    stepDays: Math.max(1, int('COLD_STEP_DAYS', 2)),
+    maxPerDay: int('COLD_MAX_PER_DAY', 40),
+  },
+  /** Unicidade da copy por IA: Jaccard máximo (shingles de 3 palavras) contra copies anteriores e tentativas. */
+  uniq: {
+    maxJaccard: Number(process.env.UNIQ_MAX_JACCARD ?? '') || 0.35,
+    maxAttempts: Math.max(1, int('UNIQ_MAX_ATTEMPTS', 3)),
+    compareLast: int('UNIQ_COMPARE_LAST', 2000),
   },
 
   /** Teto de segurança global por caixa/dia (cold). 0 = sem teto (vale só a rampa). */

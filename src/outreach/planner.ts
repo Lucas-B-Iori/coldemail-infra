@@ -42,7 +42,7 @@ export async function planQueue(): Promise<void> {
     const followups = q.all<Lead>(
       `SELECT l.* FROM leads l
          JOIN sequence_steps s ON s.sequence_id = l.sequence_id AND s.step_number = l.current_step + 1
-        WHERE l.status = 'sent' AND l.next_due_at <= ?
+        WHERE l.status = 'sent' AND l.next_due_at <= ? AND l.needs_review IS NULL
           AND (l.assigned_account_id = ?
                OR l.assigned_account_id IS NULL
                OR l.assigned_account_id IN (SELECT id FROM accounts WHERE status='banned'))
@@ -56,7 +56,7 @@ export async function planQueue(): Promise<void> {
 
     if (want > 0) {
       const fresh = q.all<Lead>(
-        `SELECT * FROM leads WHERE status='pending' AND sequence_id IS NOT NULL ORDER BY id LIMIT ?`, want,
+        `SELECT * FROM leads WHERE status='pending' AND sequence_id IS NOT NULL AND needs_review IS NULL ORDER BY fit_score DESC, id LIMIT ?`, want,
       );
       for (const lead of fresh) await enqueue(acc, lead);
     }
@@ -89,7 +89,15 @@ async function enqueue(acc: Account, lead: Lead): Promise<boolean> {
   const senderPerson = acc.display_name.split('|')[0].trim();
 
   // Gera copy adaptativa por IA ou fallback nos modelos oficiais
-  const copy = await generateAdaptiveCopy(lead, next, senderPerson);
+  const result = await generateAdaptiveCopy(lead, next, senderPerson.split(/\s+/)[0], step);
+  if (!result.ok) {
+    // Sem template genérico: o lead sai do fluxo automático até alguém revisar (leads review / leads clear-review)
+    q.run(`UPDATE leads SET needs_review=?, updated_at=? WHERE id=?`, result.reason, nowIso(), lead.id);
+    addLog({ lead_id: lead.id, account_id: acc.id, kind: 'error', event: 'needs_review', detail: result.reason, action: 'lead aguardando revisão (não enviado)' });
+    log('planner', `⚠ lead #${lead.id} <${lead.email}> passo ${next} → needs_review: ${result.reason}`);
+    return false;
+  }
+  const copy = result.copy;
   const subject = sameThread
     ? (/^re:/i.test(lead.thread_subject!) ? lead.thread_subject! : `Re: ${lead.thread_subject}`)
     : copy.subject;

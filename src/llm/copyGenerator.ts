@@ -1,6 +1,8 @@
 import { chatJson } from './client.ts';
 import type { Lead } from '../outreach/leads.ts';
-import { firstName, lintEmail } from '../outreach/templates.ts';
+import { firstName, leadVars, lintEmail, renderTemplate } from '../outreach/templates.ts';
+import { config } from '../config.ts';
+import { maxSimilarity, normalizeCore, recordCopy } from './uniqueness.ts';
 import { log } from '../lib/util.ts';
 
 export interface GeneratedCopy {
@@ -23,145 +25,129 @@ export interface ReplyClassification {
   suggestedReply: string;
 }
 
+export interface StepTemplate {
+  subject_template: string;
+  body_template: string;
+}
+
+export type CopyResult = { ok: true; copy: GeneratedCopy } | { ok: false; reason: string };
+
+const OPT_OUTS = [
+  'Se não fizer sentido, é só responder "não" que eu não escrevo mais.',
+  'Se não for do seu interesse, responda "sair" e eu tiro seu contato da lista.',
+  'Caso não queira receber mais mensagens minhas, é só responder "não".',
+  'Se preferir não receber mais e-mails, responda "sair" e eu paro por aqui.',
+];
+
+const ANGLES_STEP1 = [
+  'abra comentando algo concreto do fato observado e conecte com quem procura o negócio pelo celular',
+  'abra com uma pergunta curta e específica sobre como os clientes encontram o negócio hoje, baseada no fato observado',
+  'abra elogiando com sobriedade um detalhe real do fato observado (sem exagero) e siga para a oferta',
+  'abra contando em uma frase como você encontrou o negócio (segmento + cidade) e cite o fato observado',
+  'abra pelo que um cliente novo precisa ver antes de ir até lá (horário, endereço, fotos), ligando ao fato observado',
+];
+const ANGLES_FOLLOW = [
+  'traga um detalhe novo e prático da prévia (o que ela mostraria para esse negócio específico)',
+  'reforce em uma frase que a prévia é vista antes de qualquer decisão e pergunte se pode montar',
+  'seja bem curto e direto, retomando o fato observado com outras palavras',
+];
+
 /**
- * Gera um e-mail de cold outreach personalizado para um lead jurídico com base no Plano Mestre:
- * - Inspirado no framework Alex Hormozi ($100M Leads) e mentoria Hustler BR.
- * - Máximo de 3 parágrafos curtos (50 a 85 palavras).
- * - ZERO links e zero URLs.
- * - ZERO travessões (—), sem tom robótico de IA, sem promessas milagrosas.
- * - CTA suave pedindo permissão para enviar vídeo de 90 segundos.
+ * Copy ÚNICA por lead e por passo (COPY_MODE=ai, padrão do cold).
+ * - Exige fato_observado: sem ele não gera (lead vai para revisão).
+ * - A IA escreve só o núcleo (saudação + texto + pedido); opt-out e assinatura são anexados pelo código.
+ * - Cada candidato passa por lint, filtro de promessas e checagem de similaridade (Jaccard de shingles)
+ *   contra as últimas copies geradas e contra as tentativas da própria rodada; acima do limite, regera.
+ * - Se a IA falhar ou esgotar as tentativas: NÃO cai para template; retorna { ok:false, reason }.
+ * COPY_MODE=template mantém o comportamento antigo (template da sequência), só se escolhido explicitamente.
  */
 export async function generateAdaptiveCopy(
   lead: Lead,
   stepNumber: number,
   senderName: string,
-): Promise<GeneratedCopy> {
-  const fName = firstName(lead.name);
-  const firm = lead.firm_name || 'seu escritório';
-  const role = lead.role || 'advogado(a)';
-  const area = lead.practice_area || 'advocacia';
-  const fact = lead.observed_fact || '';
-  const hypothesis = lead.need_hypothesis || '';
-  const variant = lead.variant || 'modelo_a';
-
-  const systemPrompt = `Você é um copywriter executivo de alto nível especializado em Cold Mail B2B para advogados e escritórios de advocacia no Brasil.
-Seu objetivo é redigir um e-mail curto, extremamente natural, sóbrio e humano para apresentar o Dendrix (CRM jurídico simples focado em cadastro de clientes, acompanhamento de processos e publicações).
-
-REGRAS INEGOCIÁVEIS (SANTO GRAAL DO COLD MAIL):
-1. Extensão: Máximo de 3 parágrafos curtos. Entre 50 e 80 palavras no total. Ninguém lê e-mail longo.
-2. ZERO LINKS: Nunca inclua links, URLs de site, domínios nem links de WhatsApp no e-mail.
-3. ZERO CHEIRO DE IA: É ESTRITAMENTE PROIBIDO usar travessões ("—" ou "--"). Nunca use palavras infladas como "revolucionário", "inovador", "alavancar", "potencializar", "ecossistema", "espero que este e-mail o encontre bem".
-4. Foco no cliente: Comece falando sobre a rotina/situação do escritório, nunca sobre "eu desenvolvi" ou "nossa empresa".
-5. CTA Suave: Termine sempre com uma pergunta simples de baixo atrito pedindo permissão para mandar um vídeo de 90 segundos mostrando a rotina com dados fictícios.
-6. Linguagem: Português do Brasil, tom profissional, sóbrio e respeitoso (conforme Provimento 205 da OAB, sem promessas absurdas de nunca perder prazos).
-
-Retorne SEMPRE um JSON válido com os campos:
-{
-  "subject": "assunto curto em minúsculas (máximo 5 palavras)",
-  "body": "corpo do e-mail com quebras de linha duplas entre os parágrafos"
-}`;
-
-  let userPrompt = '';
-
-  if (stepNumber === 1) {
-    userPrompt = `Redija o Toque 1 (primeiro contato frio) para o seguinte prospect:
-Nome: ${fName} (${lead.name})
-Escritório: ${firm}
-Função: ${role}
-Área/Segmento: ${area}
-Fato observado: ${fact || 'Advogado atuante na região'}
-Hipótese de dor: ${hypothesis || 'Consulta de publicações e organização de processos'}
-Modelo base: ${variant}
-Remetente: ${senderName}
-
-Exemplo de estrutura ideal:
-Oi, ${fName}.
-Quando entra uma publicação, como vocês organizam a consulta junto ao acompanhamento dos processos?
-Desenvolvi o Dendrix, um sistema jurídico simples com cadastro de clientes, processos e publicações.
-Posso te enviar um vídeo de 90 segundos mostrando como organizamos isso na prática?
-${senderName} | Dendrix`;
-  } else if (stepNumber === 2) {
-    userPrompt = `Redija o Toque 2 (Follow-up 1, após 3 dias sem resposta) na mesma thread para:
-Nome: ${fName}
-Escritório: ${firm}
-Remetente: ${senderName}
-
-Objetivo: Concretizar o valor com brevidade. O vídeo de 90s mostra 3 partes (cadastro de clientes, processos e publicações) para ele avaliar antes de decidir conversar.
-Perguntar se pode enviar o vídeo.
-Manter no máximo 35 a 55 palavras. Sem links. Sem travessões.`;
-  } else {
-    userPrompt = `Redija o Toque 3 (Follow-up 2 / Break-up final, após 8 dias) para:
-Nome: ${fName}
-Escritório: ${firm}
-Remetente: ${senderName}
-
-Objetivo: Encerrar com gentileza para desocupar a caixa de entrada. Dizer que talvez não seja prioridade agora, mas deixar a porta aberta caso queira ver o vídeo no futuro.
-Manter no máximo 35 a 50 palavras. Sem links. Sem travessões.`;
-  }
-
-  try {
-    const res = await chatJson<GeneratedCopy>(
-      [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      0.7,
-    );
-
-    // Sanitização rigorosa pós-IA
-    let cleanSubject = (res.subject || 'publicações do escritório')
-      .replace(/[—–]/g, '-')
-      .replace(/["']/g, '')
-      .trim();
-    let cleanBody = (res.body || '')
-      .replace(/[—–]/g, '')
-      .replace(/\r\n/g, '\n')
-      .trim();
-
-    // Validação de segurança de entrega
-    const lintErr = lintEmail(cleanSubject, cleanBody, stepNumber);
-    if (!lintErr) {
-      return { subject: cleanSubject, body: cleanBody };
-    }
-    log('copyGenerator', `IA gerou copy com alerta de lint (${lintErr}); usando fallback seguro.`);
-  } catch (e) {
-    log('copyGenerator', `Falha na geração via IA: ${e instanceof Error ? e.message : String(e)}; usando fallback.`);
-  }
-
-  // Fallback seguro baseado nos modelos oficiais do relatório
-  return getFallbackCopy(lead, stepNumber, senderName);
-}
-
-/** Fallback baseado nos modelos validados da pesquisa */
-function getFallbackCopy(lead: Lead, stepNumber: number, senderName: string): GeneratedCopy {
-  const fName = firstName(lead.name);
-  const firm = lead.firm_name || 'seu escritório';
-
-  if (stepNumber === 1) {
-    if (lead.variant === 'modelo_c') {
-      return {
-        subject: `financeiro do escritório, ${fName}`,
-        body: `Oi, ${fName}.\n\nVocês consultam o financeiro no sistema jurídico ou mantêm esse controle em outra ferramenta?\n\nDesenvolvi o Dendrix, um sistema jurídico com controle financeiro, clientes e acompanhamento de processos.\n\nPosso te enviar uma demonstração rápida de 90 segundos do financeiro para você avaliar se atende ao escritório?\n\n${senderName} | Dendrix`,
-      };
-    }
+  step: StepTemplate,
+): Promise<CopyResult> {
+  if (config.copyMode === 'template') {
     return {
-      subject: `publicações do escritório`,
-      body: `Oi, ${fName}.\n\nQuando entra uma publicação, como vocês organizam a consulta junto ao acompanhamento dos processos?\n\nDesenvolvi o Dendrix, um sistema jurídico simples com cadastro de clientes, acompanhamento de processos e publicações.\n\nPosso te enviar um vídeo de 90 segundos mostrando como funciona na prática?\n\n${senderName} | Dendrix`,
+      ok: true,
+      copy: {
+        subject: renderTemplate(step.subject_template, lead, senderName),
+        body: renderTemplate(step.body_template, lead, senderName),
+      },
     };
   }
 
-  if (stepNumber === 2) {
-    return {
-      subject: `Re: publicações do escritório`,
-      body: `${fName}, o exemplo que mencionei mostra três partes: cadastro do cliente, processos e publicações no Dendrix.\n\nAssim você consegue avaliar o funcionamento antes de decidir se vale conversar.\n\nPosso enviar o vídeo?\n\n${senderName}`,
-    };
-  }
+  const fact = (lead.observed_fact ?? '').trim();
+  if (fact.length < 8) return { ok: false, reason: 'sem fato_observado (obrigatório para copy única)' };
 
-  return {
-    subject: `Re: publicações do escritório`,
-    body: `${fName}, imagino que a rotina esteja corrida, então vou encerrar o contato por aqui para não ocupar sua caixa.\n\nSe avaliar a organização do escritório fizer sentido mais adiante, é só me responder por aqui.\n\nObrigado,\n${senderName}`,
-  };
+  const v = leadVars(lead, senderName);
+  const leadTokens = [lead.firm_name, v.first_name, lead.name, v.city, lead.neighborhood, lead.practice_area, senderName];
+  const tried: string[] = [];
+  const issues: string[] = [];
+
+  for (let attempt = 1; attempt <= config.uniq.maxAttempts; attempt++) {
+    const angles = stepNumber === 1 ? ANGLES_STEP1 : ANGLES_FOLLOW;
+    const angle = angles[(lead.id + attempt + stepNumber) % angles.length];
+    const systemPrompt = `Você escreve e-mails frios curtos, em português do Brasil, para donos de pequenos comércios locais.
+Quem escreve é ${senderName}, que faz sites de uma página (one-page) por valor fechado de ${config.sitePrice}: apresentação, fotos, horários, endereço com mapa e botão de WhatsApp.
+
+REGRAS INEGOCIÁVEIS:
+1. Entre 45 e 85 palavras. Parágrafos curtos. Texto simples, como alguém escrevendo do celular. Cada e-mail deve soar escrito à mão para ESTE negócio.
+2. Nenhum link, URL, domínio ou @ de Instagram.
+3. Nada de travessão (— ou --), emoji ou palavras infladas ("revolucionário", "alavancar", "potencializar", "transformar seu negócio").
+4. Use o fato observado de forma natural e verdadeira. Não invente nota, avaliações, bairro, nomes ou problemas do site.
+5. NÃO prometa resultado: proibido "mais clientes", "vender mais", "primeiro lugar no Google", "garantido", "grátis", "sem custo".
+6. Termine com UM pedido de permissão para montar uma prévia e mandar para a pessoa ver antes de decidir.
+7. NÃO escreva linha de descadastro nem assinatura (o sistema adiciona).
+8. Comece com saudação curta: ${v.first_name ? `"Oi, ${v.first_name}"` : 'neutra ("Oi, tudo bem?" ou "Olá")'}.
+
+Responda SOMENTE com JSON: {"subject": "assunto curto em minúsculas, até 6 palavras, sem ponto de exclamação", "body": "texto com linhas em branco entre parágrafos"}`;
+
+    const userPrompt = `Toque ${stepNumber} de 3${stepNumber === 1 ? ' (primeiro contato)' : stepNumber === 2 ? ' (follow-up curto na mesma conversa, 3 dias depois; 25 a 50 palavras)' : ' (último e-mail: encerra com gentileza e deixa a porta aberta; 25 a 45 palavras)'}.
+Ângulo desta versão: ${angle}.
+Negócio: ${v.business}
+Segmento: ${v.segment}
+Cidade/bairro: ${[v.city, lead.neighborhood].filter(Boolean).join(' / ') || 'não informado'}
+Situação do site: ${lead.site_status ?? 'desconhecida'}
+Google Maps: ${lead.maps_rating ?? '?'} de nota, ${lead.maps_reviews ?? '?'} avaliações (só cite se nota ≥ 4,3 e ≥ 20 avaliações)
+FATO OBSERVADO (use): ${fact}
+${tried.length ? `\nAs versões abaixo ficaram parecidas demais com e-mails já enviados. Escreva algo com estrutura, abertura e frases DIFERENTES:\n${tried.map((t, i) => `[${i + 1}] ${t.slice(0, 400)}`).join('\n')}` : ''}`;
+
+    let res: GeneratedCopy;
+    try {
+      res = await chatJson<GeneratedCopy>(
+        [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
+        Math.min(1.1, 0.75 + 0.15 * attempt),
+      );
+    } catch (e) {
+      issues.push(`IA falhou: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`);
+      continue;
+    }
+
+    const subject = (res.subject || '').replace(/[—–]/g, '-').replace(/["'!]/g, '').trim().toLowerCase();
+    const core = (res.body || '').replace(/[—–]/g, ',').replace(/\r\n/g, '\n').trim();
+    if (!subject || !core) { issues.push('IA devolveu vazio'); continue; }
+    const optOut = OPT_OUTS[(lead.id + stepNumber) % OPT_OUTS.length];
+    const body = `${core}\n\n${optOut}\n\n${senderName}`;
+
+    const problem = lintEmail(subject, body, stepNumber) ?? promiseCheck(body) ?? (/\{|\}/.test(body) ? 'chaves no texto' : null);
+    if (problem) { issues.push(`lint: ${problem}`); tried.push(core); continue; }
+
+    const norm = normalizeCore(`${subject} ${core}`, leadTokens);
+    const { score } = maxSimilarity(norm, tried.map((t) => normalizeCore(t, leadTokens)));
+    if (score > config.uniq.maxJaccard) {
+      issues.push(`similaridade ${score.toFixed(2)} > ${config.uniq.maxJaccard}`);
+      tried.push(core);
+      continue;
+    }
+    recordCopy(lead.id, stepNumber, subject, norm, score);
+    return { ok: true, copy: { subject, body } };
+  }
+  return { ok: false, reason: `copy única não gerada em ${config.uniq.maxAttempts} tentativa(s): ${issues.join(' | ').slice(0, 400)}` };
 }
+
+const PROMISE_RE = /(mais clientes|vender mais|primeiro lugar|1º lugar|topo do google|garant|grátis|gratuito|sem custo)/i;
+const promiseCheck = (body: string): string | null => (PROMISE_RE.test(body) ? 'promessa proibida' : null);
 
 /**
  * Classifica a resposta humana recebida do advogado em uma das 8 intenções do Plano Mestre
@@ -174,29 +160,29 @@ export async function classifyLeadReply(
 ): Promise<ReplyClassification> {
   const fName = firstName(leadName);
 
-  const prompt = `Analise a seguinte resposta enviada por um advogado/escritório após receber um cold mail sobre um sistema jurídico (Dendrix):
+  const prompt = `Analise a resposta de um dono de comércio local a um e-mail frio que oferecia montar uma prévia de site de uma página por ${config.sitePrice}${firmName ? ` (negócio: ${firmName})` : ''}:
 ---
 RESPOSTA DO PROSPECT:
 "${replyText}"
 ---
 
-Categorize em EXATAMENTE UMA das seguintes intenções:
-1. manda_video: Prospect concordou em ver o vídeo/amostra (ex: "manda", "pode mandar", "quero ver").
-2. quanto_custa: Perguntou valores, preços ou planos (ex: "qual o valor?", "quanto custa?").
-3. vamos_marcar: Quer agendar reunião/call ou ver ao vivo (ex: "vamos marcar", "pode me ligar?", "tem horário?").
-4. ja_usa_outro: Informou que já usa outro sistema (ex: "já usamos o Projuris", "uso o Astrea").
-5. agora_nao: Sem tempo no momento ou pediu para retomar depois (ex: "agora está corrido", "fale comigo mês que vem").
-6. sem_interesse: Recusou educadamente ou pediu descadastro (ex: "não tenho interesse", "retire meu e-mail").
-7. outro_responsavel: Indicou outra pessoa ou setor (ex: "fale com o Dr. Marcos", "envie para o financeiro").
-8. out_of_office: Resposta automática de férias/ausência.
-9. outros: Qualquer outra situação ambígua.
+Categorize em EXATAMENTE UMA intenção:
+1. manda_video: aceitou ver a prévia/exemplo (ex: "pode mandar", "quero ver", "manda aí").
+2. quanto_custa: perguntou preço, forma de pagamento, domínio/hospedagem ou o que está incluso.
+3. vamos_marcar: quer conversar por telefone/WhatsApp/reunião.
+4. ja_usa_outro: já tem site/agência ou acha que o Instagram basta.
+5. agora_nao: sem tempo/dinheiro agora, pediu para retomar depois.
+6. sem_interesse: recusou ou pediu para não receber mais (ex: "não", "sair", "remova meu e-mail").
+7. outro_responsavel: indicou outra pessoa.
+8. out_of_office: resposta automática.
+9. outros: ambíguo.
 
-Gere uma sugestão de resposta curta, educada e direta em português do Brasil (sem travessões).
-Se for "manda_video": inclua link fictício [LINK_DO_VIDEO] e pergunte como organizam hoje.
-Se for "quanto_custa": informe que o plano custa R$ 200/mês e pergunte qual rotina é mais crítica.
-Se for "vamos_marcar": ofereça 2 opções de horários reais (10 a 15 min).
-Se for "ja_usa_outro": agradeça e pergunte se há alguma rotina que ainda precisam resolver fora dele.
-Se for "sem_interesse": agradeça com brevidade e confirme a retirada.
+Sugira uma resposta curta e humana em pt-BR (sem travessões, sem promessas de resultado):
+- manda_video: agradeça, diga que vai montar a prévia e peça 2 ou 3 fotos ou o @ do Instagram e o WhatsApp de contato.
+- quanto_custa: valor fechado de ${config.sitePrice} pelo site; diga que domínio/hospedagem você explica e confirma por escrito antes (NÃO invente valores); ofereça montar a prévia antes de qualquer pagamento.
+- vamos_marcar: peça o melhor número de WhatsApp e ofereça 2 horários.
+- ja_usa_outro: agradeça e pergunte se o site atual mostra horários, mapa e WhatsApp; sem insistir.
+- sem_interesse: agradeça e confirme que não vai mais escrever.
 
 Retorne JSON:
 {
@@ -208,7 +194,7 @@ Retorne JSON:
   try {
     return await chatJson<ReplyClassification>(
       [
-        { role: 'system', content: 'Você é um classificador e copiloto comercial experiente em B2B jurídico.' },
+        { role: 'system', content: 'Você é um classificador e copiloto comercial de uma pequena agência que vende sites one-page para comércio local.' },
         { role: 'user', content: prompt },
       ],
       0.3,

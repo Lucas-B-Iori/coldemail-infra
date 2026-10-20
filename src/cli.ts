@@ -12,7 +12,7 @@ import { errMsg, localDate, pLimit } from './lib/util.ts';
 import { newWarmupEmail } from './llm/warmupPrompts.ts';
 import { enrollLead, importLeads, setLeadStatus } from './outreach/leads.ts';
 import type { Lead, LeadStatus } from './outreach/leads.ts';
-import { seedSequences, validateSequences } from './outreach/sequences.ts';
+import { SAMPLE_LEADS, seedSequences, validateSequences } from './outreach/sequences.ts';
 import { lintEmail, renderTemplate, signature } from './outreach/templates.ts';
 import { WARMUP_DAYS, config } from './config.ts';
 
@@ -222,7 +222,7 @@ const commands: Record<string, () => Promise<void> | void> = {
     switch (sub) {
       case 'import': {
         const rows = parseCsv(readFileSync(rest[0], 'utf8'));
-        const r = importLeads(rows, { list: s('list') ?? 'default', sequence: s('sequence') ?? 'dendrix_main' });
+        const r = importLeads(rows, { list: s('list') ?? 'default', sequence: s('sequence') ?? 'site_main' });
         return console.log(`Leads: +${r.added} novos, ${r.duplicates} duplicados, ${r.invalid} inválidos.`);
       }
       case 'list': {
@@ -236,6 +236,19 @@ const commands: Record<string, () => Promise<void> | void> = {
         );
         return;
       }
+      case 'review': {
+        // leads review -> leads que a IA não conseguiu escrever (não enviados)
+        console.table(q.all<Lead>(`SELECT * FROM leads WHERE needs_review IS NOT NULL ORDER BY updated_at DESC LIMIT ?`, Number(s('limit') ?? 50))
+          .map((l) => ({ id: l.id, email: l.email, empresa: l.firm_name ?? '', passo: l.current_step + 1, motivo: (l.needs_review ?? '').slice(0, 90) })));
+        return;
+      }
+      case 'clear-review': {
+        // leads clear-review <email> [--fact "novo fato observado"] -> devolve ao fluxo automático
+        const l = q.get<Lead>('SELECT * FROM leads WHERE email=?', (rest[0] ?? '').toLowerCase());
+        if (!l) throw new Error('uso: leads clear-review <email> [--fact "fato observado"]');
+        q.run('UPDATE leads SET needs_review=NULL, observed_fact=COALESCE(?, observed_fact), updated_at=? WHERE id=?', s('fact') ?? null, new Date().toISOString(), l.id);
+        return console.log(`${l.email}: revisão liberada`);
+      }
       case 'set': {
         // leads set <email> --status call|nurture|replied|unsubscribed...
         const l = q.get<Lead>('SELECT * FROM leads WHERE email=?', (rest[0] ?? '').toLowerCase());
@@ -245,7 +258,7 @@ const commands: Record<string, () => Promise<void> | void> = {
       }
       case 'move': {
         // Reaproveita leads em lote: respondeu e sumiu -> nova sequência / lista de ligação
-        // leads move --status replied --older-than-days 7 --sequence dendrix_nurture --to-list nurture
+        // leads move --status replied --older-than-days 7 --sequence site_nurture --to-list nurture
         // leads move --status replied --older-than-days 7 --set-status call
         const days = Number(s('older-than-days') ?? 0);
         const ls = q.all<Lead>(
@@ -262,7 +275,7 @@ const commands: Record<string, () => Promise<void> | void> = {
         return console.log(`${ls.length} lead(s) movido(s).`);
       }
       default:
-        throw new Error('leads: import | list | set | move');
+        throw new Error('leads: review | clear-review | import | list | set | move');
     }
   },
 
@@ -280,15 +293,15 @@ const commands: Record<string, () => Promise<void> | void> = {
 
   /** Mostra como o e-mail ficará, sem enviar nada. */
   preview() {
-    const seq = s('sequence') ?? 'dendrix_main';
+    const seq = s('sequence') ?? 'site_main';
     const step = Number(s('step') ?? 1);
     const st = q.get<{ subject_template: string; body_template: string }>(
       `SELECT st.* FROM sequence_steps st JOIN sequences s ON s.id=st.sequence_id WHERE s.name=? AND st.step_number=?`, seq, step,
     );
     if (!st) throw new Error('passo não encontrado');
-    const lead = { name: 'Dr. Carlos Silva', firm_name: 'Silva Advocacia', city_state: 'São Paulo/SP' };
-    const subject = renderTemplate(st.subject_template, lead);
-    const body = renderTemplate(st.body_template, lead) + signature({ display_name: 'Seu Nome' });
+    const lead = SAMPLE_LEADS[Number(s('sample') ?? 0) % SAMPLE_LEADS.length];
+    const subject = renderTemplate(st.subject_template, lead, 'Lucas');
+    const body = renderTemplate(st.body_template, lead, 'Lucas');
     console.log(`Assunto: ${subject}\n\n${body}\n\n[lint: ${lintEmail(subject, body, step) ?? 'OK'} | ${body.split(/\s+/).length} palavras]`);
   },
 

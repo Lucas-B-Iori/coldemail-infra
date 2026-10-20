@@ -14,10 +14,25 @@ const M365_ACCOUNTS = [
   { email: 'lionel@synapzeai.net', name: 'Lionel Duarte | Synapze' },
 ];
 
-const GMAIL_SEEDS = [
-  { email: 'lucasbertolassiiori@gmail.com', name: 'Lucas Iori', pass: process.env.GMAIL_SEED_1_PASS || 'alpshzeiddznurrd' },
-  { email: 'nersodamat@gmail.com', name: 'Nerso Mat', pass: process.env.GMAIL_SEED_2_PASS || 'ylzclhszddpszodq' },
-];
+/**
+ * Sementes Gmail (App Passwords) lidas EXCLUSIVAMENTE do ambiente.
+ * Defina SEED_GMAIL_<N>_USER, SEED_GMAIL_<N>_PASS e (opcional) SEED_GMAIL_<N>_NAME, N=1..10.
+ * Sementes sem USER e PASS são ignoradas com aviso.
+ */
+function loadGmailSeeds(): { email: string; name: string; pass: string }[] {
+  const seeds: { email: string; name: string; pass: string }[] = [];
+  for (let i = 1; i <= 10; i++) {
+    const email = process.env[`SEED_GMAIL_${i}_USER`]?.trim();
+    const pass = process.env[`SEED_GMAIL_${i}_PASS`]?.replace(/\s+/g, '');
+    if (!email && !pass) continue;
+    if (!email || !pass) {
+      log('autoSeed', `AVISO: SEED_GMAIL_${i}_USER/PASS incompletos — semente ${i} ignorada.`);
+      continue;
+    }
+    seeds.push({ email, pass, name: process.env[`SEED_GMAIL_${i}_NAME`]?.trim() || email });
+  }
+  return seeds;
+}
 
 /**
  * Se o banco for novo (ex: primeiro deploy em container/Easypanel),
@@ -43,7 +58,11 @@ export function autoSeedFleetIfEmpty(): void {
     );
   }
 
-  // 2. Inserir 2 sementes Gmail (App Passwords)
+  // 2. Inserir sementes Gmail (App Passwords, via env)
+  const GMAIL_SEEDS = loadGmailSeeds();
+  if (GMAIL_SEEDS.length === 0) {
+    log('autoSeed', 'AVISO: nenhuma semente Gmail configurada (SEED_GMAIL_<N>_USER/PASS). Pulando sementes.');
+  }
   for (const s of GMAIL_SEEDS) {
     q.run(
       `INSERT INTO accounts (email, display_name, provider, auth_mode, group_name, smtp_host, smtp_port, smtp_user, smtp_pass,
@@ -55,5 +74,5 @@ export function autoSeedFleetIfEmpty(): void {
     );
   }
 
-  log('autoSeed', 'Frota de 11 contas inicializada com sucesso para o Dia 1 (09/10/2026)!');
+  log('autoSeed', `Frota inicializada: ${M365_ACCOUNTS.length} M365 + ${GMAIL_SEEDS.length} sementes Gmail.`);
 }

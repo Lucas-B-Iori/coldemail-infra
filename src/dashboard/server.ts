@@ -133,7 +133,7 @@ export function startDashboard(port = PORT): http.Server {
           const rows = parseCsv(payload.csvText);
           const resImport = importLeads(rows, {
             list: payload.listName || 'default',
-            sequence: 'dendrix_main',
+            sequence: 'site_main',
           });
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ ok: true, ...resImport }));
