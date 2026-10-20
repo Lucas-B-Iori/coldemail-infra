@@ -2,16 +2,12 @@ import { chatJson, isRecord, nonEmptyString } from './client.ts';
 import type { Lead } from '../outreach/leads.ts';
 import { firstName, leadVars, lintEmail, renderTemplate } from '../outreach/templates.ts';
 import { config } from '../config.ts';
+import { maxSimilarity, normalizeCore, recordCopy } from './uniqueness.ts';
 import { log } from '../lib/util.ts';
 
 export interface GeneratedCopy {
   subject: string;
   body: string;
-}
-
-export interface CopyTemplate {
-  subject_template: string;
-  body_template: string;
 }
 
 export interface ReplyClassification {
@@ -34,75 +30,124 @@ export interface StepTemplate {
   body_template: string;
 }
 
+export type CopyResult = { ok: true; copy: GeneratedCopy } | { ok: false; reason: string };
+
+const OPT_OUTS = [
+  'Se não fizer sentido, é só responder "não" que eu não escrevo mais.',
+  'Se não for do seu interesse, responda "sair" e eu tiro seu contato da lista.',
+  'Caso não queira receber mais mensagens minhas, é só responder "não".',
+  'Se preferir não receber mais e-mails, responda "sair" e eu paro por aqui.',
+];
+
+const ANGLES_STEP1 = [
+  'abra comentando algo concreto do fato observado e conecte com quem procura o negócio pelo celular',
+  'abra com uma pergunta curta e específica sobre como os clientes encontram o negócio hoje, baseada no fato observado',
+  'abra elogiando com sobriedade um detalhe real do fato observado (sem exagero) e siga para a oferta',
+  'abra contando em uma frase como você encontrou o negócio (segmento + cidade) e cite o fato observado',
+  'abra pelo que um cliente novo precisa ver antes de ir até lá (horário, endereço, fotos), ligando ao fato observado',
+];
+const ANGLES_FOLLOW = [
+  'traga um detalhe novo e prático da prévia (o que ela mostraria para esse negócio específico)',
+  'reforce em uma frase que a prévia é vista antes de qualquer decisão e pergunte se pode montar',
+  'seja bem curto e direto, retomando o fato observado com outras palavras',
+];
+
 /**
- * Gera a copy de um passo da cadência de venda de site one-page.
- * - COPY_MODE=template (padrão): renderiza o template da sequência (determinístico, já passou no lint).
- * - COPY_MODE=ai: um modelo barato (DeepSeek/MiMo via OpenRouter) reescreve o template para o lead;
- *   se a IA falhar ou violar o lint, usa o template renderizado.
+ * Copy ÚNICA por lead e por passo (COPY_MODE=ai, padrão do cold).
+ * - Exige fato_observado: sem ele não gera (lead vai para revisão).
+ * - A IA escreve só o núcleo (saudação + texto + pedido); opt-out e assinatura são anexados pelo código.
+ * - Cada candidato passa por lint, filtro de promessas e checagem de similaridade (Jaccard de shingles)
+ *   contra as últimas copies geradas e contra as tentativas da própria rodada; acima do limite, regera.
+ * - Se a IA falhar ou esgotar as tentativas: NÃO cai para template; retorna { ok:false, reason }.
+ * COPY_MODE=template mantém o comportamento antigo (template da sequência), só se escolhido explicitamente.
  */
 export async function generateAdaptiveCopy(
   lead: Lead,
   stepNumber: number,
   senderName: string,
   step: StepTemplate,
-): Promise<GeneratedCopy> {
-  const base: GeneratedCopy = {
-    subject: renderTemplate(step.subject_template, lead, senderName),
-    body: renderTemplate(step.body_template, lead, senderName),
-  };
-  if (config.copyMode !== 'ai') return base;
+): Promise<CopyResult> {
+  if (config.copyMode === 'template') {
+    return {
+      ok: true,
+      copy: {
+        subject: renderTemplate(step.subject_template, lead, senderName),
+        body: renderTemplate(step.body_template, lead, senderName),
+      },
+    };
+  }
+
+  const fact = (lead.observed_fact ?? '').trim();
+  if (fact.length < 8) return { ok: false, reason: 'sem fato_observado (obrigatório para copy única)' };
 
   const v = leadVars(lead, senderName);
-  const systemPrompt = `Você escreve e-mails frios curtos, em português do Brasil, para donos de pequenos comércios locais (padaria, salão, oficina, clínica, restaurante, pet shop etc.).
+  const leadTokens = [lead.firm_name, v.first_name, lead.name, v.city, lead.neighborhood, lead.practice_area, senderName];
+  const tried: string[] = [];
+  const issues: string[] = [];
+
+  for (let attempt = 1; attempt <= config.uniq.maxAttempts; attempt++) {
+    const angles = stepNumber === 1 ? ANGLES_STEP1 : ANGLES_FOLLOW;
+    const angle = angles[(lead.id + attempt + stepNumber) % angles.length];
+    const systemPrompt = `Você escreve e-mails frios curtos, em português do Brasil, para donos de pequenos comércios locais.
 Quem escreve é ${senderName}, que faz sites de uma página (one-page) por valor fechado de ${config.sitePrice}: apresentação, fotos, horários, endereço com mapa e botão de WhatsApp.
 
 REGRAS INEGOCIÁVEIS:
-1. Entre 50 e 100 palavras. Parágrafos curtos. Texto simples, como alguém escrevendo do celular.
-2. Nenhum link, URL, domínio ou @ de Instagram no texto.
-3. Nada de travessão (— ou --), nada de emoji, nada de palavras infladas ("revolucionário", "alavancar", "potencializar", "transformar seu negócio").
-4. Abra falando do negócio do lead (o que você observou), nunca de você.
-5. NÃO prometa resultado: proibido "mais clientes", "vender mais", "primeiro lugar no Google", "garantido", "grátis".
-6. Use só os fatos fornecidos. Não invente nota, avaliações, bairro ou problemas do site.
-7. Termine com UM pedido de permissão: posso montar uma prévia e te mandar para você ver?
-8. Inclua uma linha de opt-out clara (ex.: "Se não fizer sentido, é só responder 'não' que eu não escrevo mais."), exceto no último toque.
-9. Assine só com o primeiro nome: ${senderName}.
+1. Entre 45 e 85 palavras. Parágrafos curtos. Texto simples, como alguém escrevendo do celular. Cada e-mail deve soar escrito à mão para ESTE negócio.
+2. Nenhum link, URL, domínio ou @ de Instagram.
+3. Nada de travessão (— ou --), emoji ou palavras infladas ("revolucionário", "alavancar", "potencializar", "transformar seu negócio").
+4. Use o fato observado de forma natural e verdadeira. Não invente nota, avaliações, bairro, nomes ou problemas do site.
+5. NÃO prometa resultado: proibido "mais clientes", "vender mais", "primeiro lugar no Google", "garantido", "grátis", "sem custo".
+6. Termine com UM pedido de permissão para montar uma prévia e mandar para a pessoa ver antes de decidir.
+7. NÃO escreva linha de descadastro nem assinatura (o sistema adiciona).
+8. Comece com saudação curta: ${v.first_name ? `"Oi, ${v.first_name}"` : 'neutra ("Oi, tudo bem?" ou "Olá")'}.
 
-Responda SOMENTE com JSON: {"subject": "assunto curto em minúsculas, até 6 palavras", "body": "corpo com linhas em branco entre parágrafos"}`;
+Responda SOMENTE com JSON: {"subject": "assunto curto em minúsculas, até 6 palavras, sem ponto de exclamação", "body": "texto com linhas em branco entre parágrafos"}`;
 
-  const userPrompt = `Toque ${stepNumber} de 3${stepNumber === 1 ? ' (primeiro contato)' : stepNumber === 2 ? ' (follow-up curto na mesma conversa, 3 dias depois)' : ' (último e-mail, encerra com gentileza e deixa a porta aberta)'}.
+    const userPrompt = `Toque ${stepNumber} de 3${stepNumber === 1 ? ' (primeiro contato)' : stepNumber === 2 ? ' (follow-up curto na mesma conversa, 3 dias depois; 25 a 50 palavras)' : ' (último e-mail: encerra com gentileza e deixa a porta aberta; 25 a 45 palavras)'}.
+Ângulo desta versão: ${angle}.
 Negócio: ${v.business}
 Segmento: ${v.segment}
-Local: ${v.place}
-Contato conhecido: ${v.first_name || 'não (use saudação neutra "Oi, tudo bem?")'}
+Cidade/bairro: ${[v.city, lead.neighborhood].filter(Boolean).join(' / ') || 'não informado'}
 Situação do site: ${lead.site_status ?? 'desconhecida'}
-Google Maps: ${lead.maps_rating ?? '?'} de nota, ${lead.maps_reviews ?? '?'} avaliações
-Observação do pesquisador: ${lead.observed_fact || '(nenhuma)'}
+Google Maps: ${lead.maps_rating ?? '?'} de nota, ${lead.maps_reviews ?? '?'} avaliações (só cite se nota ≥ 4,3 e ≥ 20 avaliações)
+FATO OBSERVADO (use): ${fact}
+${tried.length ? `\nAs versões abaixo ficaram parecidas demais com e-mails já enviados. Escreva algo com estrutura, abertura e frases DIFERENTES:\n${tried.map((t, i) => `[${i + 1}] ${t.slice(0, 400)}`).join('\n')}` : ''}`;
 
-Use este rascunho aprovado como base e mantenha a mesma estrutura e o mesmo pedido:
-ASSUNTO: ${base.subject}
-${base.body}`;
+    let raw: unknown;
+    try {
+      raw = await chatJson<unknown>(
+        [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
+        Math.min(1.1, 0.75 + 0.15 * attempt),
+      );
+    } catch (e) {
+      issues.push(`IA falhou: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`);
+      continue;
+    }
 
-  if (selectedTemplate) {
-    userPrompt = `Personalize o template da sequência selecionada, preservando assunto, intenção, contexto e CTA. Não invente contato anterior além do template. Remetente: ${senderName}.\nAssunto: ${renderTemplate(selectedTemplate.subject_template, lead)}\nCorpo: ${renderTemplate(selectedTemplate.body_template, lead)}\nInclua: ${OPT_OUT}`;
+    // validação de schema (reliability): rejeita envelope inválido e caracteres de controle no assunto
+    if (!isRecord(raw) || !nonEmptyString(raw.subject) || !nonEmptyString(raw.body)) { issues.push('IA devolveu schema inválido'); continue; }
+    if (/[\r\n\x00-\x1f\x7f]/.test(raw.subject)) { issues.push('assunto com caractere de controle'); continue; }
+    const res = { subject: raw.subject, body: raw.body };
+    const subject = (res.subject || '').replace(/[—–]/g, '-').replace(/["'!]/g, '').trim().toLowerCase();
+    const core = (res.body || '').replace(/[—–]/g, ',').replace(/\r\n/g, '\n').trim();
+    if (!subject || !core) { issues.push('IA devolveu vazio'); continue; }
+    const optOut = OPT_OUTS[(lead.id + stepNumber) % OPT_OUTS.length];
+    const body = `${core}\n\n${optOut}\n\n${senderName}`;
+
+    const problem = lintEmail(subject, body, stepNumber) ?? promiseCheck(body) ?? (/\{|\}/.test(body) ? 'chaves no texto' : null);
+    if (problem) { issues.push(`lint: ${problem}`); tried.push(core); continue; }
+
+    const norm = normalizeCore(`${subject} ${core}`, leadTokens);
+    const { score } = maxSimilarity(norm, tried.map((t) => normalizeCore(t, leadTokens)));
+    if (score > config.uniq.maxJaccard) {
+      issues.push(`similaridade ${score.toFixed(2)} > ${config.uniq.maxJaccard}`);
+      tried.push(core);
+      continue;
+    }
+    recordCopy(lead.id, stepNumber, subject, norm, score);
+    return { ok: true, copy: { subject, body } };
   }
-
-  try {
-    const res = await chatJson<unknown>(
-      [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      0.7,
-    );
-    const subject = (res.subject || base.subject).replace(/[—–]/g, '-').replace(/["']/g, '').trim();
-    const body = (res.body || '').replace(/[—–]/g, ',').replace(/\r\n/g, '\n').trim();
-    const lintErr = lintEmail(subject, body, stepNumber) ?? promiseCheck(body);
-    if (!lintErr && body) return { subject, body };
-    log('copyGenerator', `IA gerou copy com alerta (${lintErr ?? 'vazia'}); usando template.`);
-  } catch (e) {
-    log('copyGenerator', `Falha na IA: ${e instanceof Error ? e.message : String(e)}; usando template.`);
-  }
-  return base;
+  return { ok: false, reason: `copy única não gerada em ${config.uniq.maxAttempts} tentativa(s): ${issues.join(' | ').slice(0, 400)}` };
 }
 
 const PROMISE_RE = /(mais clientes|vender mais|primeiro lugar|1º lugar|topo do google|garant|grátis|gratuito|sem custo)/i;

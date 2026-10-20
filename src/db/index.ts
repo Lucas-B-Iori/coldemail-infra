@@ -48,6 +48,8 @@ function migrateLeadsTable(): void {
     ['maps_reviews', 'INTEGER'],
     ['site_status', 'TEXT'],
     ['contact_known', 'INTEGER NOT NULL DEFAULT 0'],
+    // motivo de revisão manual (IA falhou, sem fato_observado, copy repetida). NULL = ok para enviar
+    ['needs_review', 'TEXT'],
   ];
   for (const [col, typeDef] of newCols) {
     if (!existing.has(col)) {

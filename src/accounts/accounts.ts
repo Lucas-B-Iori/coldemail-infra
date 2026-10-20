@@ -2,7 +2,10 @@ import { WARMUP_DAYS, config } from "../config.ts";
 import { addLog, q } from "../db/index.ts";
 import { decrypt, encrypt } from "../lib/crypto.ts";
 import { addMs, localDate, log, nowIso } from "../lib/util.ts";
-import { outreachLimit, warmupTargetFor, warmupRange } from "./ramp.ts";
+import { coldLimitFor, coldRampEnabled, coldStarted, warmupTargetFor, warmupRange } from "./ramp.ts";
+
+/** Caixa já está na fase de cold? (rampa nova por COLD_START_DATE, ou legada após WARMUP_DAYS) */
+const inColdPhase = (day: number): boolean => (coldRampEnabled() ? coldStarted() : day > WARMUP_DAYS);
 export type AccountStatus = "warming" | "active" | "paused" | "banned";
 export type AccountProvider = "gmail" | "outlook" | "m365" | "other";
 export interface Account {
@@ -154,9 +157,10 @@ export function rollDay(): void {
     let status = a.status;
     if (
       status === "warming" &&
-      day > WARMUP_DAYS &&
+      inColdPhase(day) &&
       a.auto_promote &&
-      !a.warmup_only
+      !a.warmup_only &&
+      a.provider !== "gmail"
     ) {
       status = "active";
       addLog({
@@ -172,7 +176,7 @@ export function rollDay(): void {
       today,
       warmupTargetFor(day),
       status === "active" && !a.warmup_only && a.provider !== "gmail"
-        ? capLimit(a.limit_override ?? outreachLimit(day))
+        ? capLimit(a.limit_override ?? coldLimitFor(day))
         : 0,
       status,
       a.id,
@@ -202,7 +206,7 @@ export function resumeAccount(a: Account): void {
   const status: AccountStatus =
     !a.warmup_only &&
     a.provider !== "gmail" &&
-    healthyWarmupDays(a.id) >= WARMUP_DAYS
+    (coldRampEnabled() ? coldStarted() : healthyWarmupDays(a.id) >= WARMUP_DAYS)
       ? "active"
       : "warming";
   q.run(

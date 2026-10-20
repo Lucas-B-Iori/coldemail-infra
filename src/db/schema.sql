@@ -409,3 +409,17 @@ CREATE TABLE IF NOT EXISTS processed_inbox_messages (
   processed_at TEXT NOT NULL,
   PRIMARY KEY(account_id, message_key)
 );
+
+-- ---------------------------------------------------------------------
+-- copies geradas por IA (núcleo do texto, sem opt-out/assinatura) para checagem de unicidade
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS generated_copies (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_id     INTEGER NOT NULL REFERENCES leads(id),
+  step_number INTEGER NOT NULL,
+  subject     TEXT NOT NULL,
+  core        TEXT NOT NULL,
+  max_jaccard REAL NOT NULL DEFAULT 0,
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gen_copies_step ON generated_copies(step_number, id);

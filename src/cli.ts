@@ -236,6 +236,19 @@ const commands: Record<string, () => Promise<void> | void> = {
         );
         return;
       }
+      case 'review': {
+        // leads review -> leads que a IA não conseguiu escrever (não enviados)
+        console.table(q.all<Lead>(`SELECT * FROM leads WHERE needs_review IS NOT NULL ORDER BY updated_at DESC LIMIT ?`, Number(s('limit') ?? 50))
+          .map((l) => ({ id: l.id, email: l.email, empresa: l.firm_name ?? '', passo: l.current_step + 1, motivo: (l.needs_review ?? '').slice(0, 90) })));
+        return;
+      }
+      case 'clear-review': {
+        // leads clear-review <email> [--fact "novo fato observado"] -> devolve ao fluxo automático
+        const l = q.get<Lead>('SELECT * FROM leads WHERE email=?', (rest[0] ?? '').toLowerCase());
+        if (!l) throw new Error('uso: leads clear-review <email> [--fact "fato observado"]');
+        q.run('UPDATE leads SET needs_review=NULL, observed_fact=COALESCE(?, observed_fact), updated_at=? WHERE id=?', s('fact') ?? null, new Date().toISOString(), l.id);
+        return console.log(`${l.email}: revisão liberada`);
+      }
       case 'set': {
         // leads set <email> --status call|nurture|replied|unsubscribed...
         const l = q.get<Lead>('SELECT * FROM leads WHERE email=?', (rest[0] ?? '').toLowerCase());
@@ -262,7 +275,7 @@ const commands: Record<string, () => Promise<void> | void> = {
         return console.log(`${ls.length} lead(s) movido(s).`);
       }
       default:
-        throw new Error('leads: import | list | set | move');
+        throw new Error('leads: review | clear-review | import | list | set | move');
     }
   },
 
