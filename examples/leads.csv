@@ -1,3 +1,3 @@
-name,email,firm_name,city_state
-Dr. Carlos Silva,carlos@teste1.com.br,Silva Advocacia,São Paulo/SP
-Ana Souza,ana@teste2.com.br,Souza & Lima,Belo Horizonte/MG
+email,empresa,contato,segmento,cidade,uf,bairro,telefone,instagram,nota_maps,avaliacoes_maps,site_status,pontos,fonte_url,fato_observado
+contato@paodourado.com.br,Padaria Pão Dourado,,Padaria,Campinas,SP,Cambuí,(19) 99999-0000,@paodourado,"4,7",312,nenhum,8,https://maps.google.com/?cid=123,
+marcos@oficinadomarcos.com.br,Oficina do Marcos,Marcos Lima,Oficina mecânica,Santos,SP,Gonzaga,(13) 98888-0000,,4.1,18,ruim,6,https://maps.google.com/?cid=456,site sem versão mobile

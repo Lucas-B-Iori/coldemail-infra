@@ -98,7 +98,7 @@ async function enqueue(acc: Account, lead: Lead): Promise<boolean> {
     !!lead.thread_subject;
   const senderPerson = acc.display_name.split("|")[0].trim();
   // Gera copy adaptativa por IA ou fallback nos modelos oficiais
-  const copy = await generateAdaptiveCopy(lead, next, senderPerson, step);
+  const copy = await generateAdaptiveCopy(lead, next, senderPerson.split(/\s+/)[0], step);
   const subject = sameThread
     ? /^re:/i.test(lead.thread_subject!)
       ? lead.thread_subject!

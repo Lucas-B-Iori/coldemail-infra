@@ -15,8 +15,19 @@ export function nonEmptyString(value: unknown): value is string {
 }
 
 /** Cliente para qualquer API compatível com OpenAI (DeepSeek, Qwen, Moonshot, OpenRouter...). */
+/** Só modelos baratos. GPT/Claude (e afins caros) são bloqueados por política de custo. */
+const CHEAP_FALLBACKS = (process.env.LLM_FALLBACK_MODELS ?? 'deepseek/deepseek-chat,xiaomi/mimo-v2-flash')
+  .split(',').map((m) => m.trim()).filter(Boolean);
+const BLOCKED_MODEL = /(openai\/|anthropic\/|\bgpt-|claude|(^|\/)o[134](-|$))/i;
+
+export function assertCheapModel(model: string): void {
+  if (BLOCKED_MODEL.test(model)) throw new Error(`Modelo "${model}" bloqueado: use apenas DeepSeek/MiMo (modelos baratos).`);
+}
+
 export async function chatJson<T>(messages: ChatMessage[], temperature = 1.1): Promise<T> {
   if (!config.llm.apiKey) throw new Error('LLM_API_KEY não configurada no .env');
+  assertCheapModel(config.llm.model);
+  CHEAP_FALLBACKS.forEach(assertCheapModel);
   let lastErr: unknown;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
@@ -29,7 +40,7 @@ export async function chatJson<T>(messages: ChatMessage[], temperature = 1.1): P
           response_format: { type: 'json_object' },
         };
         if (isOpenRouter) {
-          bodyPayload.models = [config.llm.model, 'google/gemini-2.0-flash-001', 'meta-llama/llama-3.3-70b-instruct'];
+          bodyPayload.models = [...new Set([config.llm.model, ...CHEAP_FALLBACKS])];
         }
         const res = await fetch(`${config.llm.baseUrl}/chat/completions`, {
           method: 'POST',

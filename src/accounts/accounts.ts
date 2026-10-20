@@ -1,7 +1,7 @@
 import { WARMUP_DAYS, config } from "../config.ts";
 import { addLog, q } from "../db/index.ts";
 import { decrypt, encrypt } from "../lib/crypto.ts";
-import { addMs, localDate, nowIso } from "../lib/util.ts";
+import { addMs, localDate, log, nowIso } from "../lib/util.ts";
 import { outreachLimit, warmupTargetFor, warmupRange } from "./ramp.ts";
 export type AccountStatus = "warming" | "active" | "paused" | "banned";
 export type AccountProvider = "gmail" | "outlook" | "m365" | "other";
@@ -254,6 +254,7 @@ export function recordAccountError(
     detail: message,
   });
   if (kind === "auth") {
+    log("accounts", `⛔ CAIXA PAUSADA ${a.email} por erro de autenticação/permissão: ${message.slice(0, 200)} (retome com: accounts resume)`);
     autoPause(a, `Falha de autenticação: ${message.slice(0, 120)}`);
     return;
   }

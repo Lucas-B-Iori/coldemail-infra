@@ -79,4 +79,8 @@ export function replyText(m: ParsedMail): string {
   return out.join('\n').trim();
 }
 
-export const isUnsubscribe = (text: string): boolean => UNSUB.test(text.slice(0, 400));
+/** Respostas curtas pedidas no opt-out da copy ("não", "sair", "nao obrigado"...). */
+const SHORT_OPTOUT = /^\s*(n[ãa]o|sair|nao|não,? obrigad[oa]|n[ãa]o,? valeu|pode tirar|tira)[\s.!,]*$/i;
+
+export const isUnsubscribe = (text: string): boolean =>
+  UNSUB.test(text.slice(0, 400)) || SHORT_OPTOUT.test(text.split(/\r?\n/).filter((l) => l.trim())[0] ?? '');
