@@ -143,10 +143,13 @@ export const accountDay = (a: Pick<Account, "id">): number =>
 export function rollDay(): void {
   refreshWarmupHealth();
   const today = localDate();
+  // Rebaixa caixas que não podem fazer cold. Com a rampa por data (COLD_START_DATE já iniciada),
+  // o critério de 21 dias saudáveis de warm-up não se aplica (decisão do Lucas: cold junto com warm-up).
+  const minHealthyDays = coldRampEnabled() && coldStarted() ? 0 : WARMUP_DAYS;
   q.run(
     `UPDATE accounts SET status='warming',daily_limit=0 WHERE status='active' AND (warmup_only=1 OR provider='gmail' OR (SELECT COUNT(*) FROM warmup_daily_health h WHERE h.account_id=accounts.id AND h.healthy=1 AND h.day < ?) < ?)`,
     today,
-    WARMUP_DAYS,
+    minHealthyDays,
   );
   const rows = q.all<Account>(
     `SELECT * FROM accounts WHERE status != 'banned' AND (counters_date IS NULL OR counters_date != ?)`,
@@ -349,7 +352,8 @@ export const coldEligible = (a: Account): boolean =>
   a.status === "active" &&
   !a.warmup_only &&
   a.provider !== "gmail" &&
-  healthyWarmupDays(a.id) >= WARMUP_DAYS;
+  // Rampa por data (COLD_START_DATE) libera o cold junto com o warm-up; sem ela, exige 21 dias saudáveis.
+  (coldRampEnabled() ? coldStarted() : healthyWarmupDays(a.id) >= WARMUP_DAYS);
 export function refreshWarmupHealth(): void {
   const today = localDate();
   for (const a of q.all<Account>("SELECT * FROM accounts")) {

@@ -12,10 +12,10 @@ writeFileSync(hook, `import { registerHooks } from 'node:module';
 registerHooks({load(url,context,next){
  let source;
  if(url.endsWith('/src/accounts/accounts.ts')) source="export const selectAccounts=()=>[{id:1,email:'test@example.invalid',status:'warming',auth_mode:'password'}];";
- if(url.endsWith('/src/email/smtp.ts')) source="export const verifySmtp=async()=>{if(process.env.TEST_SMTP_FAIL==='1')throw new Error('synthetic SMTP failure')};";
+ if(url.endsWith('/src/email/smtp.ts')) source="export const usesGraph=()=>false; export const verifySmtp=async()=>{if(process.env.TEST_SMTP_FAIL==='1')throw new Error('synthetic SMTP failure')};";
  if(url.endsWith('/src/email/imap.ts')) source="export const verifyImap=async()=>{if(process.env.TEST_IMAP_FAIL==='1')throw new Error('synthetic IMAP failure')};";
  if(url.endsWith('/src/email/oauth.ts')) source="export const oauthConfigured=()=>true;";
- if(url.endsWith('/src/lib/util.ts')) source="export const errMsg=e=>e.message; export const pLimit=()=>{};";
+ if(url.endsWith('/src/lib/util.ts')) source="export const errMsg=e=>e.message; export const pLimit=()=>{}; export const log=()=>{}; export const sleep=async()=>{};";
  return source?{format:'module',source,shortCircuit:true}:next(url,context);
 }});`);
 function run(smtp, imap, smtpOnly = false) {

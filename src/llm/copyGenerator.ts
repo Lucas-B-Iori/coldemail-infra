@@ -131,6 +131,7 @@ ${tried.length ? `\nAs versões abaixo ficaram parecidas demais com e-mails já 
     const subject = (res.subject || '').replace(/[—–]/g, '-').replace(/["'!]/g, '').trim().toLowerCase();
     const core = (res.body || '').replace(/[—–]/g, ',').replace(/\r\n/g, '\n').trim();
     if (!subject || !core) { issues.push('IA devolveu vazio'); continue; }
+    if (core.split(/\s+/).length < 15) { issues.push('IA devolveu texto curto demais'); continue; }
     const optOut = OPT_OUTS[(lead.id + stepNumber) % OPT_OUTS.length];
     const body = `${core}\n\n${optOut}\n\n${senderName}`;
 
@@ -138,7 +139,7 @@ ${tried.length ? `\nAs versões abaixo ficaram parecidas demais com e-mails já 
     if (problem) { issues.push(`lint: ${problem}`); tried.push(core); continue; }
 
     const norm = normalizeCore(`${subject} ${core}`, leadTokens);
-    const { score } = maxSimilarity(norm, tried.map((t) => normalizeCore(t, leadTokens)));
+    const { score } = maxSimilarity(norm, tried.map((t) => normalizeCore(t, leadTokens)), { leadId: lead.id, step: stepNumber });
     if (score > config.uniq.maxJaccard) {
       issues.push(`similaridade ${score.toFixed(2)} > ${config.uniq.maxJaccard}`);
       tried.push(core);

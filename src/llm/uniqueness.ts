@@ -32,12 +32,18 @@ export function jaccard(a: Set<string>, b: Set<string>): number {
 }
 
 /** Maior similaridade do candidato contra as últimas N copies (todos os passos) e contra `extra` (tentativas da rodada). */
-export function maxSimilarity(core: string, extra: string[] = []): { score: number; againstId: number | null } {
+export function maxSimilarity(
+  core: string,
+  extra: string[] = [],
+  self?: { leadId: number; step: number },
+): { score: number; againstId: number | null } {
   const cand = shingles(core);
   let best = 0;
   let againstId: number | null = null;
   const rows = q.all<{ id: number; core: string }>(
-    `SELECT id, core FROM generated_copies ORDER BY id DESC LIMIT ?`, config.uniq.compareLast,
+    // ignora copies do PRÓPRIO lead/passo (regeneração após falha de enfileiramento não conta como repetição)
+    `SELECT id, core FROM generated_copies WHERE NOT (lead_id = ? AND step_number = ?) ORDER BY id DESC LIMIT ?`,
+    self?.leadId ?? -1, self?.step ?? -1, config.uniq.compareLast,
   );
   for (const r of rows) {
     const s = jaccard(cand, shingles(r.core));

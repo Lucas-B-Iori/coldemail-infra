@@ -96,6 +96,9 @@ async function enqueue(acc: Account, lead: Lead): Promise<boolean> {
     !!lead.last_message_id &&
     !!lead.thread_subject;
   const senderPerson = acc.display_name.split("|")[0].trim();
+  // Checa elegibilidade ANTES de gastar IA (evita gerar copy que não será enfileirada)
+  const eligibleNow = getAccount(acc.id);
+  if (!eligibleNow || !coldEligible(eligibleNow)) return false;
   // Gera copy adaptativa por IA ou fallback nos modelos oficiais
   const result = await generateAdaptiveCopy(lead, next, senderPerson.split(/\s+/)[0], step);
   if (!result.ok) {

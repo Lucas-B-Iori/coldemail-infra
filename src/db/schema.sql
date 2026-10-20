@@ -415,7 +415,7 @@ CREATE TABLE IF NOT EXISTS processed_inbox_messages (
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS generated_copies (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  lead_id     INTEGER NOT NULL REFERENCES leads(id),
+  lead_id     INTEGER NOT NULL,
   step_number INTEGER NOT NULL,
   subject     TEXT NOT NULL,
   core        TEXT NOT NULL,

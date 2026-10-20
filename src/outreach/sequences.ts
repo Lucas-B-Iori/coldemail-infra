@@ -58,6 +58,8 @@ ${OPT_OUT}
 
 Se um dia quiser ver como ficaria o site de vocês, é só responder aqui que eu monto a prévia.
 
+${OPT_OUT}
+
 {Obrigado pela atenção|Valeu pela atenção},
 {{sender}}`,
   },
@@ -86,6 +88,8 @@ ${OPT_OUT}
 Último e-mail por aqui. Se preferir, me passe um WhatsApp e eu te mando a prévia por lá.
 
 Se não for o momento, sem problema.
+
+${OPT_OUT}
 
 {{sender}}`,
   },
