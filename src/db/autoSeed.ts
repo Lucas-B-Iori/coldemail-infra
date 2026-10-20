@@ -14,18 +14,27 @@ const M365_ACCOUNTS = [
   { email: "lionel@synapzeai.net", name: "Lionel Duarte | Synapze" },
 ];
 
-const GMAIL_SEEDS = [
-  {
-    email: "lucasbertolassiiori@gmail.com",
-    name: "Lucas Iori",
-    pass: process.env.GMAIL_SEED_1_PASS || String(),
-  },
-  {
-    email: "nersodamat@gmail.com",
-    name: "Nerso Mat",
-    pass: process.env.GMAIL_SEED_2_PASS || String(),
-  },
-];
+/**
+ * Sementes Gmail (App Passwords) lidas EXCLUSIVAMENTE do ambiente.
+ * SEED_GMAIL_<N>_USER, SEED_GMAIL_<N>_PASS e (opcional) SEED_GMAIL_<N>_NAME, N=1..10.
+ * Compatível com o legado GMAIL_SEED_1_PASS / GMAIL_SEED_2_PASS (endereços padrão abaixo).
+ */
+const LEGACY_SEED_EMAILS = ["lucasbertolassiiori@gmail.com", "nersodamat@gmail.com"];
+
+function loadGmailSeeds(): { email: string; name: string; pass: string }[] {
+  const seeds: { email: string; name: string; pass: string }[] = [];
+  for (let i = 1; i <= 10; i++) {
+    const email = (process.env[`SEED_GMAIL_${i}_USER`] ?? LEGACY_SEED_EMAILS[i - 1] ?? "").trim();
+    const pass = (process.env[`SEED_GMAIL_${i}_PASS`] ?? process.env[`GMAIL_SEED_${i}_PASS`] ?? "").replace(/\s+/g, "");
+    if (!pass) continue;
+    if (!email) {
+      log("autoSeed", `AVISO: SEED_GMAIL_${i}_PASS sem SEED_GMAIL_${i}_USER; semente ${i} ignorada.`);
+      continue;
+    }
+    seeds.push({ email, pass, name: process.env[`SEED_GMAIL_${i}_NAME`]?.trim() || email });
+  }
+  return seeds;
+}
 
 /**
  * Se o banco for novo (ex: primeiro deploy em container/Easypanel),
@@ -68,15 +77,12 @@ export function autoSeedFleetIfEmpty(): void {
     );
   }
 
-  // 2. Inserir 2 sementes Gmail (App Passwords)
+  // 2. Inserir sementes Gmail (App Passwords, via env)
+  const GMAIL_SEEDS = loadGmailSeeds();
+  if (GMAIL_SEEDS.length === 0) {
+    log("autoSeed", "Nenhuma semente Gmail configurada (SEED_GMAIL_<N>_USER/PASS); cadastro adiado.");
+  }
   for (const s of GMAIL_SEEDS) {
-    if (!s.pass) {
-      log(
-        "autoSeed",
-        "Semente Gmail sem credencial configurada; cadastro adiado.",
-      );
-      continue;
-    }
     q.run(
       `INSERT INTO accounts (email, display_name, provider, auth_mode, group_name, smtp_host, smtp_port, smtp_user, smtp_pass,
          imap_host, imap_port, warmup_started_at, warmup_only, auto_promote, status, created_at)
