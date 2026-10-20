@@ -423,3 +423,16 @@ CREATE TABLE IF NOT EXISTS generated_copies (
   created_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_gen_copies_step ON generated_copies(step_number, id);
+
+-- ---------------------------------------------------------------------
+-- copies prontas importadas (ex.: toque 1 escrito pelo Davi). Usadas exatamente como estão.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS lead_copies (
+  lead_id     INTEGER NOT NULL,
+  step_number INTEGER NOT NULL DEFAULT 1,
+  subject     TEXT NOT NULL,
+  body        TEXT NOT NULL,              -- com o marcador [ASSINATURA] (substituído no enfileiramento)
+  source      TEXT,
+  imported_at TEXT NOT NULL,
+  PRIMARY KEY (lead_id, step_number)
+);

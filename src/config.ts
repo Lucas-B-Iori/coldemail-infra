@@ -39,6 +39,9 @@ export const config = {
     model: str('LLM_MODEL', 'deepseek/deepseek-chat'),
   },
 
+  /** Bloco que substitui [ASSINATURA] nas copies importadas. Sem ele, copies importadas não são enfileiradas. */
+  signatureBlock: (process.env.SIGNATURE_BLOCK ?? '').replace(/\\n/g, '\n').trim(),
+
   signature: {
     role: str('SIGNATURE_ROLE', ''),
     phone: str('SIGNATURE_PHONE', ''),

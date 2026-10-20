@@ -50,6 +50,8 @@ function migrateLeadsTable(): void {
     ['contact_known', 'INTEGER NOT NULL DEFAULT 0'],
     // motivo de revisão manual (IA falhou, sem fato_observado, copy repetida). NULL = ok para enviar
     ['needs_review', 'TEXT'],
+    // prioridade manual (1 = primeiro); NULL = depois dos priorizados
+    ['priority', 'INTEGER'],
   ];
   for (const [col, typeDef] of newCols) {
     if (!existing.has(col)) {

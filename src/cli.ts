@@ -13,6 +13,7 @@ import { newWarmupEmail } from './llm/warmupPrompts.ts';
 import { enrollLead, importLeads, setLeadStatus } from './outreach/leads.ts';
 import type { Lead, LeadStatus } from './outreach/leads.ts';
 import { SAMPLE_LEADS, seedSequences, validateSequences } from './outreach/sequences.ts';
+import { copyBlockers, copyWarnings, hasOptOut, importLeadCopies, importedCopyFor } from './outreach/importedCopies.ts';
 import { lintEmail, renderTemplate, signature } from './outreach/templates.ts';
 import { WARMUP_DAYS, config } from './config.ts';
 
@@ -26,7 +27,7 @@ const { positionals, values } = parseArgs({
     step: { type: 'string' }, to: { type: 'string' }, 'older-than-days': { type: 'string' }, 'to-list': { type: 'string' },
     'smtp-host': { type: 'string' }, 'smtp-port': { type: 'string' }, 'imap-host': { type: 'string' }, 'imap-port': { type: 'string' },
     account: { type: 'string' }, 'set-status': { type: 'string' }, json: { type: 'boolean' }, auth: { type: 'string' },
-    'warmup-only': { type: 'boolean' },
+    'warmup-only': { type: 'boolean' }, 'dry-run': { type: 'boolean' }, fact: { type: 'string' }, sample: { type: 'string' },
   },
 });
 const v = values as Record<string, string | boolean | undefined>;
@@ -276,6 +277,71 @@ const commands: Record<string, () => Promise<void> | void> = {
       }
       default:
         throw new Error('leads: review | clear-review | import | list | set | move');
+    }
+  },
+
+  /**
+   * copies import <emails.csv> [--step 1] [--dry-run]
+   *   CSV: prioridade,email,empresa,cidade,assunto,corpo. Assunto/corpo usados exatamente como estão.
+   * copies check <leads.csv> <emails.csv> -> valida os 2 CSVs sem tocar no banco
+   * copies show <email> -> mostra como o e-mail importado vai sair (com SIGNATURE_BLOCK)
+   */
+  copies() {
+    const report = (r: ReturnType<typeof importLeadCopies>) => {
+      const list = (t: string, xs: string[]) => xs.length && console.log(`${t} (${xs.length}):\n  ${xs.join('\n  ')}`);
+      console.log(`Copies: ${r.imported} novas, ${r.updated} atualizadas.`);
+      list('Sem lead no banco', r.unmatched); list('E-mail duplicado no CSV', r.duplicates);
+      list('Assunto repetido', r.dupSubjects); list('Corpo repetido', r.dupBodies);
+      list('BLOQUEADAS (não importadas)', r.blocked.map((b) => `${b.email}: ${b.issues.join('; ')}`));
+      list('Avisos (não bloqueiam)', r.warnings.map((w) => `${w.email}: ${w.issues.join('; ')}`));
+    };
+    switch (sub) {
+      case 'import': {
+        const rows = parseCsv(readFileSync(rest[0], 'utf8'));
+        const r = importLeadCopies(rows, { step: Number(s('step') ?? 1), dryRun: v['dry-run'] === true, source: rest[0] });
+        report(r);
+        if (!config.signatureBlock) console.log('⚠ SIGNATURE_BLOCK não definido: estas copies NÃO serão enfileiradas até configurar.');
+        return;
+      }
+      case 'check': {
+        const leads = parseCsv(readFileSync(rest[0], 'utf8'));
+        const emails = parseCsv(readFileSync(rest[1], 'utf8'));
+        const le = leads.map((l) => (l.email ?? '').trim().toLowerCase());
+        const ee = new Set(emails.map((e) => (e.email ?? '').trim().toLowerCase()));
+        const dupLeads = le.filter((e, i) => le.indexOf(e) !== i);
+        console.log(`Leads: ${leads.length} | Emails: ${emails.length}`);
+        if (dupLeads.length) console.log(`Lead duplicado: ${dupLeads.join(', ')}`);
+        const noCopy = le.filter((e) => !ee.has(e)); if (noCopy.length) console.log(`Lead sem e-mail pronto (${noCopy.length}): ${noCopy.join(', ')}`);
+        const noLead = [...ee].filter((e) => !le.includes(e)); if (noLead.length) console.log(`E-mail pronto sem lead (${noLead.length}): ${noLead.join(', ')}`);
+        const noFact = leads.filter((l) => !(l.fato_observado ?? '').trim()).map((l) => l.email); if (noFact.length) console.log(`Lead sem fato_observado (${noFact.length}) — follow-ups pela IA irão para needs_review: ${noFact.join(', ')}`);
+        // validação das copies sem gravar: simula como se todos os leads existissem
+        const r = { imported: 0, updated: 0, unmatched: [] as string[], duplicates: [] as string[], dupSubjects: [] as string[], dupBodies: [] as string[], warnings: [] as { email: string; issues: string[] }[], blocked: [] as { email: string; issues: string[] }[], missingCopy: [] };
+        const seen = new Set<string>(), sj = new Map<string, string>(), bd = new Map<string, string>();
+        for (const e of emails) {
+          const em = (e.email ?? '').trim().toLowerCase(), sub1 = e.assunto ?? '', body = (e.corpo ?? '').replace(/\r\n/g, '\n');
+          if (seen.has(em)) r.duplicates.push(em); seen.add(em);
+          const sk = sub1.trim().toLowerCase(), bk = body.replace(/\s+/g, ' ').trim().toLowerCase();
+          if (sj.has(sk)) r.dupSubjects.push(`${em} = ${sj.get(sk)}`); else sj.set(sk, em);
+          if (bd.has(bk)) r.dupBodies.push(`${em} = ${bd.get(bk)}`); else bd.set(bk, em);
+          const bl = copyBlockers(sub1, body); if (bl.length) r.blocked.push({ email: em, issues: bl });
+          const w = copyWarnings(sub1, body, 1); if (!hasOptOut(body)) w.push('sem opt-out (será adicionado)');
+          if (w.length) r.warnings.push({ email: em, issues: w });
+        }
+        r.imported = emails.length - r.blocked.length - r.duplicates.length;
+        report(r);
+        return;
+      }
+      case 'show': {
+        const l = q.get<Lead>('SELECT * FROM leads WHERE email=?', (rest[0] ?? '').toLowerCase());
+        if (!l) throw new Error('uso: copies show <email>');
+        const c = importedCopyFor(l.id, Number(s('step') ?? 1));
+        if (!c) return console.log('lead sem copy importada');
+        if (!c.ok) return console.log(`NÃO enfileirável: ${c.reason}`);
+        console.log(`Para: ${l.email}\nAssunto: ${c.copy.subject}\n\n${c.copy.body}\n\n[avisos: ${c.warnings.join(' | ') || 'nenhum'}]`);
+        return;
+      }
+      default:
+        throw new Error('copies: import <csv> [--dry-run] | check <leads.csv> <emails.csv> | show <email>');
     }
   },
 

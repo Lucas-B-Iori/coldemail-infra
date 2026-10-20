@@ -6,6 +6,7 @@ import { restoreLead } from "./leads.ts";
 import type { Lead } from "./leads.ts";
 import { lintEmail, renderTemplate, signature } from "./templates.ts";
 import { generateAdaptiveCopy } from "../llm/copyGenerator.ts";
+import { importedCopyFor } from "./importedCopies.ts";
 const BACKLOG = 3; // itens prontos por caixa; o ritmo real é governado pelo dispatcher
 interface Step {
   step_number: number;
@@ -55,7 +56,7 @@ export async function planQueue(): Promise<void> {
     }
     if (want > 0) {
       const fresh = q.all<Lead>(
-        `SELECT * FROM leads WHERE status='pending' AND sequence_id IS NOT NULL AND needs_review IS NULL ORDER BY fit_score DESC, id LIMIT ?`, want,
+        `SELECT * FROM leads WHERE status='pending' AND sequence_id IS NOT NULL AND needs_review IS NULL ORDER BY (priority IS NULL), priority, fit_score DESC, id LIMIT ?`, want,
       );
       for (const lead of fresh) await enqueue(acc, lead);
     }
@@ -100,7 +101,19 @@ async function enqueue(acc: Account, lead: Lead): Promise<boolean> {
   const eligibleNow = getAccount(acc.id);
   if (!eligibleNow || !coldEligible(eligibleNow)) return false;
   // Gera copy adaptativa por IA ou fallback nos modelos oficiais
-  const result = await generateAdaptiveCopy(lead, next, senderPerson.split(/\s+/)[0], step);
+  // Copy importada (ex.: toque 1 do Davi) tem precedência e é usada exatamente como está, sem IA.
+  const imported = importedCopyFor(lead.id, next);
+  if (imported && !imported.ok) {
+    // não marca needs_review: basta configurar SIGNATURE_BLOCK / corrigir a copy e o lead volta a ser elegível
+    log('planner', `⚠ lead #${lead.id} <${lead.email}> passo ${next}: ${imported.reason}`);
+    return false;
+  }
+  if (imported?.ok && imported.warnings.length) {
+    addLog({ lead_id: lead.id, account_id: acc.id, kind: 'info', event: 'imported_copy_warning', detail: imported.warnings.join(' | ') });
+  }
+  const result = imported?.ok
+    ? ({ ok: true, copy: imported.copy } as const)
+    : await generateAdaptiveCopy(lead, next, senderPerson.split(/\s+/)[0], step);
   if (!result.ok) {
     // Sem template genérico: o lead sai do fluxo automático até alguém revisar (leads review / leads clear-review)
     q.run(`UPDATE leads SET needs_review=?, updated_at=? WHERE id=?`, result.reason, nowIso(), lead.id);
@@ -131,7 +144,8 @@ async function enqueue(acc: Account, lead: Lead): Promise<boolean> {
     )
   )
     return false;
-  const problem = lintEmail(subject, body, next);
+  // Copies importadas: lint só reporta (registrado acima), não bloqueia nem reescreve.
+  const problem = imported?.ok ? null : lintEmail(subject, body, next);
   if (problem) {
     q.run(
       `UPDATE leads SET status='finished', notes=?, updated_at=? WHERE id=?`,

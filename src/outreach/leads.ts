@@ -54,6 +54,7 @@ export interface Lead {
   site_status: string | null;
   contact_known: number;
   needs_review: string | null;
+  priority: number | null;
   created_at: string;
   updated_at: string;
 }

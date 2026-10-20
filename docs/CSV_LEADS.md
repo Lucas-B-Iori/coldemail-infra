@@ -37,3 +37,18 @@ Sequência padrão: `site_main`.
 email,empresa,contato,segmento,cidade,uf,bairro,telefone,instagram,nota_maps,avaliacoes_maps,site_status,pontos,fonte_url,fato_observado
 ```
 Exemplo: `examples/leads.csv`.
+
+# Copies prontas (toque 1 escrito à mão)
+
+CSV: `prioridade,email,empresa,cidade,assunto,corpo` (empresa/cidade só conferência). Assunto e corpo vão **exatamente** como estão
+(sem spintax, sem IA). `[ASSINATURA]` é trocado por `SIGNATURE_BLOCK` (sem ele, nada é enfileirado). Se o corpo não tiver opt-out,
+é inserida uma linha antes da assinatura. Lint/promessas só geram aviso. Leads com prioridade saem primeiro (1 = primeiro).
+Follow-ups (toques 2 e 3) continuam pela IA e exigem `fato_observado`.
+
+```
+npm run cli -- copies check leads.csv emails.csv      # valida os 2 CSVs, não grava
+npm run cli -- leads import leads.csv                 # colunas desconhecidas são ignoradas; `variante` é guardada
+npm run cli -- copies import emails.csv --dry-run     # simula
+npm run cli -- copies import emails.csv
+npm run cli -- copies show <email>                    # como o e-mail vai sair
+```
