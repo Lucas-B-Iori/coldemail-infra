@@ -186,3 +186,17 @@ CREATE TABLE IF NOT EXISTS bounces_and_logs (
   created_at   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_logs_acc ON bounces_and_logs(account_id, created_at);
+
+-- ---------------------------------------------------------------------
+-- copies geradas por IA (núcleo do texto, sem opt-out/assinatura) para checagem de unicidade
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS generated_copies (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_id     INTEGER NOT NULL REFERENCES leads(id),
+  step_number INTEGER NOT NULL,
+  subject     TEXT NOT NULL,
+  core        TEXT NOT NULL,              -- texto normalizado (vars do lead substituídas por marcadores)
+  max_jaccard REAL NOT NULL DEFAULT 0,    -- maior similaridade encontrada no momento da geração
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gen_copies_step ON generated_copies(step_number, id);

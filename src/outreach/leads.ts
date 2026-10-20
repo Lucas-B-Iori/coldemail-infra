@@ -45,6 +45,7 @@ export interface Lead {
   maps_reviews: number | null;
   site_status: string | null;
   contact_known: number;
+  needs_review: string | null;
   created_at: string;
   updated_at: string;
 }

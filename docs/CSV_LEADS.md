@@ -28,7 +28,7 @@ Sequência padrão: `site_main`.
 | `pontos` (`pontuacao`, `fit_score`) | não | inteiro | prioridade/registro |
 | `fonte_url` (`url_origem`, `source_url`) | não | URL | registro |
 | `site` | não | URL do site atual | registro |
-| `fato_observado` | não | texto curto | contexto para COPY_MODE=ai |
+| `fato_observado` | **sim para envio** (COPY_MODE=ai, padrão) | 1 frase concreta e verdadeira sobre o negócio | base do e-mail único; vazio → lead vai para `needs_review` e não é enviado |
 | `excluir_contato` | não | `sim`/`true`/`1` → linha ignorada | — |
 | `variante`, `funcao`, `hipotese_necessidade` | não | texto | legado |
 

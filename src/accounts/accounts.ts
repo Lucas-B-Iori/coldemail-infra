@@ -2,7 +2,10 @@ import { WARMUP_DAYS, config } from '../config.ts';
 import { addLog, q } from '../db/index.ts';
 import { decrypt, encrypt } from '../lib/crypto.ts';
 import { addMs, daysBetweenLocal, localDate, log, nowIso } from '../lib/util.ts';
-import { outreachLimit, warmupTargetFor } from './ramp.ts';
+import { coldLimitFor, coldRampEnabled, coldStarted, warmupTargetFor } from './ramp.ts';
+
+/** Caixa já está na fase de cold? (rampa nova por data, ou legada após WARMUP_DAYS) */
+const inColdPhase = (day: number): boolean => (coldRampEnabled() ? coldStarted() : day > WARMUP_DAYS);
 
 export type AccountStatus = 'warming' | 'active' | 'paused' | 'banned';
 export type AccountProvider = 'gmail' | 'outlook' | 'm365' | 'other';
@@ -126,14 +129,14 @@ export function rollDay(): void {
   for (const a of rows) {
     const day = accountDay(a);
     let status = a.status;
-    if (status === 'warming' && day > WARMUP_DAYS && a.auto_promote && !a.warmup_only) {
+    if (status === 'warming' && inColdPhase(day) && a.auto_promote && !a.warmup_only) {
       status = 'active';
       addLog({ account_id: a.id, kind: 'auto_action', event: 'promoted', action: `warming -> active (dia ${day})` });
     }
     q.run(
       `UPDATE accounts SET counters_date=?, sent_today=0, warmup_sent_today=0, bounces_today=0,
          warmup_target_today=?, daily_limit=?, status=?, next_warmup_at=NULL, next_send_at=NULL WHERE id=?`,
-      today, warmupTargetFor(day), capLimit(a.limit_override ?? outreachLimit(day)), status, a.id,
+      today, warmupTargetFor(day), a.warmup_only ? 0 : capLimit(a.limit_override ?? coldLimitFor(day)), status, a.id,
     );
   }
 }
@@ -145,7 +148,7 @@ export function setStatus(id: number, status: AccountStatus, reason?: string): v
 
 /** Retoma uma caixa pausada voltando para a fase correta (warming/active). */
 export function resumeAccount(a: Account): void {
-  const status: AccountStatus = accountDay(a) > WARMUP_DAYS ? 'active' : 'warming';
+  const status: AccountStatus = inColdPhase(accountDay(a)) && !a.warmup_only ? 'active' : 'warming';
   q.run(`UPDATE accounts SET status=?, pause_reason=NULL, consecutive_errors=0, bounces_today=0 WHERE id=?`, status, a.id);
   addLog({ account_id: a.id, kind: 'info', event: 'resumed', detail: status });
 }
