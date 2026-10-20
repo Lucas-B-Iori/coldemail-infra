@@ -1,7 +1,7 @@
 import { WARMUP_DAYS, config } from '../config.ts';
 import { addLog, q } from '../db/index.ts';
 import { decrypt, encrypt } from '../lib/crypto.ts';
-import { addMs, daysBetweenLocal, localDate, nowIso } from '../lib/util.ts';
+import { addMs, daysBetweenLocal, localDate, log, nowIso } from '../lib/util.ts';
 import { outreachLimit, warmupTargetFor } from './ramp.ts';
 
 export type AccountStatus = 'warming' | 'active' | 'paused' | 'banned';
@@ -172,6 +172,7 @@ export const isCoolingDown = (a: Pick<Account, 'cooldown_until'>): boolean =>
 export function recordAccountError(a: Account, kind: SendErrorKind, message: string): void {
   addLog({ account_id: a.id, kind: 'error', event: `send_${kind}`, detail: message });
   if (kind === 'auth') {
+    log('accounts', `⛔ CAIXA PAUSADA ${a.email} por erro de autenticação/permissão: ${message.slice(0, 200)} (retome com: accounts resume)`);
     autoPause(a, `Falha de autenticação: ${message.slice(0, 120)}`);
     return;
   }

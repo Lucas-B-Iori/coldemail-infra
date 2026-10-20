@@ -27,6 +27,15 @@ function migrateLeadsTable(): void {
     ['demo_done', 'INTEGER NOT NULL DEFAULT 0'],
     ['customer_paid', 'INTEGER NOT NULL DEFAULT 0'],
     ['deal_value', 'TEXT'],
+    // rubrica de lead (venda de site one-page)
+    ['city', 'TEXT'],
+    ['neighborhood', 'TEXT'],
+    ['phone', 'TEXT'],
+    ['instagram', 'TEXT'],
+    ['maps_rating', 'REAL'],
+    ['maps_reviews', 'INTEGER'],
+    ['site_status', 'TEXT'],
+    ['contact_known', 'INTEGER NOT NULL DEFAULT 0'],
   ];
   for (const [col, typeDef] of newCols) {
     if (!existing.has(col)) {

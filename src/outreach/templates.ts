@@ -6,6 +6,14 @@ export interface LeadVars {
   name: string;
   firm_name?: string | null;
   city_state?: string | null;
+  city?: string | null;
+  neighborhood?: string | null;
+  practice_area?: string | null;
+  maps_rating?: number | null;
+  maps_reviews?: number | null;
+  site_status?: string | null;
+  instagram?: string | null;
+  contact_known?: number | null;
 }
 
 /** Resolve spintax {a|b|c} (suporta aninhamento simples). */
@@ -26,14 +34,53 @@ export function firstName(full: string): string {
   return cap(parts[0]);
 }
 
-export function renderTemplate(tpl: string, lead: LeadVars): string {
-  const vars: Record<string, string> = {
-    first_name: firstName(lead.name),
+/** Remove caracteres que quebrariam o spintax/placeholder. */
+const safe = (v: string) => v.replace(/[{}|]/g, '').trim();
+
+/**
+ * Variáveis disponíveis nos templates:
+ *  {{first_name}} {{name}} {{greeting}} {{firm_name}} {{business}} {{city}} {{neighborhood}} {{place}}
+ *  {{segment}} {{maps_phrase}} {{site_phrase}} {{price}} {{sender}}
+ */
+export function leadVars(lead: LeadVars, sender = ''): Record<string, string> {
+  const fn = lead.contact_known === 0 ? '' : firstName(lead.name);
+  const city = lead.city || (lead.city_state || '').split(/[\/,-]/)[0].trim();
+  const nb = lead.neighborhood || '';
+  const business = lead.firm_name || 'seu negócio';
+  const rating = lead.maps_rating ?? null;
+  const reviews = lead.maps_reviews ?? null;
+  const mapsPhrase =
+    rating !== null && rating >= 4.3 && reviews && reviews >= 20
+      ? ` e vi a nota ${rating.toFixed(1).replace('.', ',')} com ${reviews} avaliações no Google`
+      : '';
+  const sitePhrase =
+    lead.site_status === 'nenhum' ? 'vocês ainda não têm um site próprio'
+    : lead.site_status === 'ruim' ? 'o site atual de vocês poderia mostrar melhor o trabalho, principalmente no celular'
+    : 'quem procura vocês no Google cai direto no Maps ou no Instagram';
+  const v: Record<string, string> = {
+    first_name: fn,
     name: lead.name,
-    firm_name: lead.firm_name || 'seu escritório',
-    city: (lead.city_state || '').split(/[\/,-]/)[0].trim(),
+    greeting: fn ? `Oi, ${fn}, tudo bem?` : 'Oi, tudo bem?',
+    firm_name: business,
+    business,
+    city,
+    neighborhood: nb,
+    place: city || nb || 'na sua região',
+    segment: (lead.practice_area || 'comércio').toLowerCase(),
+    maps_phrase: mapsPhrase,
+    site_phrase: sitePhrase,
+    price: config.sitePrice,
+    sender: sender,
   };
-  return spin(tpl).replace(/\{\{(\w+)\}\}/g, (m, k: string) => vars[k] ?? m);
+  for (const k of Object.keys(v)) v[k] = k === 'maps_phrase' ? v[k].replace(/[{}|]/g, '') : safe(v[k]);
+  return v;
+}
+
+/** Substitui {{vars}} primeiro e depois resolve o spintax (valores do lead são sanitizados de { } |). */
+export function renderTemplate(tpl: string, lead: LeadVars, sender = ''): string {
+  const vars = leadVars(lead, sender);
+  const filled = tpl.replace(/\{\{(\w+)\}\}/g, (m, k: string) => vars[k] ?? m);
+  return spin(filled).replace(/[ \t]+\n/g, '\n').replace(/ {2,}/g, ' ').replace(/ ,/g, ',');
 }
 
 export function signature(a: Pick<Account, 'display_name'>): string {

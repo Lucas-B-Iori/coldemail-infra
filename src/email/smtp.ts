@@ -4,6 +4,7 @@ import { getPassword } from '../accounts/accounts.ts';
 import type { Account, SendErrorKind } from '../accounts/accounts.ts';
 import { config } from '../config.ts';
 import { getM365Token } from './oauth.ts';
+import { sendViaGraph } from './graph.ts';
 
 export interface OutgoingMail {
   to: string;
@@ -45,9 +46,22 @@ async function transport(a: Account) {
   });
 }
 
+/** Caixas M365 (oauth) usam Graph quando SEND_TRANSPORT=graph; Gmail (senha) segue no SMTP. */
+export const usesGraph = (a: Pick<Account, 'auth_mode'>): boolean =>
+  config.sendTransport === 'graph' && a.auth_mode === 'oauth';
+
 /** Envia sempre com `text` (fallback obrigatório); inclui `html` simples só se SEND_HTML=true. Retorna o Message-ID. */
 export async function sendMail(a: Account, m: OutgoingMail): Promise<string> {
   const messageId = m.messageId ?? makeMessageId(a);
+  if (usesGraph(a)) {
+    await sendViaGraph(a, {
+      from: { name: a.display_name, address: a.email },
+      to: m.to, subject: m.subject, text: m.text,
+      html: m.html ?? (config.sendHtml ? simpleHtml(m.text) : undefined),
+      messageId, inReplyTo: m.inReplyTo, references: m.references,
+    });
+    return messageId;
+  }
   const t = await transport(a);
   try {
     await t.sendMail({
@@ -84,6 +98,15 @@ export function classifySendError(e: unknown): { kind: SendErrorKind; message: s
   const err = e as { code?: string; responseCode?: number; response?: string; message?: string };
   const message = `${err.code ?? ''} ${err.response ?? err.message ?? e}`.trim();
   const rc = err.responseCode ?? 0;
+
+  // Microsoft Graph
+  if (err.code === 'EGRAPH_THROTTLE') return { kind: 'throttle', message };
+  if (err.code === 'EGRAPH_FORBIDDEN' || err.code === 'EGRAPH_TOKEN' || err.code === 'EGRAPH_CONFIG') return { kind: 'auth', message };
+  if (err.code === 'EGRAPH_TEMP') return { kind: 'temp', message };
+  if (err.code === 'EGRAPH_BAD_REQUEST') {
+    if (/recipient|ErrorInvalidRecipients/i.test(message)) return { kind: 'recipient', message };
+    return { kind: 'unknown', message };
+  }
 
   if (/4\.7\.[0-9]{3}|5\.7\.708|5\.7\.7\d\d|server busy|too many (concurrent|connections|messages per)|throttl|rate limit|4\.3\.2|try again later/i.test(message) || rc === 421)
     return { kind: 'throttle', message };

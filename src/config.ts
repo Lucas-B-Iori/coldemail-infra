@@ -21,13 +21,13 @@ export const config = {
   warmupWindow: { start: int('WARMUP_WINDOW_START', 8), end: int('WARMUP_WINDOW_END', 20) },
 
   llm: {
-    baseUrl: str('LLM_BASE_URL', 'https://api.deepseek.com').replace(/\/$/, ''),
+    baseUrl: str('LLM_BASE_URL', 'https://openrouter.ai/api/v1').replace(/\/$/, ''),
     apiKey: str('LLM_API_KEY'),
-    model: str('LLM_MODEL', 'deepseek-chat'),
+    model: str('LLM_MODEL', 'deepseek/deepseek-chat'),
   },
 
   signature: {
-    role: str('SIGNATURE_ROLE', 'Fundador | Dendrix'),
+    role: str('SIGNATURE_ROLE', ''),
     phone: str('SIGNATURE_PHONE', ''),
   },
 
@@ -41,6 +41,21 @@ export const config = {
     clientId: str('M365_CLIENT_ID'),
     clientSecret: str('M365_CLIENT_SECRET'),
   },
+
+  /**
+   * Microsoft Graph (client credentials, escopo graph.microsoft.com/.default). Usa AZURE_*; se ausente, cai para M365_*.
+   */
+  graph: {
+    tenantId: str('AZURE_TENANT_ID', str('M365_TENANT_ID')),
+    clientId: str('AZURE_CLIENT_ID', str('M365_CLIENT_ID')),
+    clientSecret: str('AZURE_CLIENT_SECRET', str('M365_CLIENT_SECRET')),
+  },
+  /** Transporte das caixas M365 (auth_mode=oauth): graph (recomendado) ou smtp (legado XOAUTH2). Gmail sempre SMTP. */
+  sendTransport: (str('SEND_TRANSPORT', 'smtp') === 'graph' ? 'graph' : 'smtp') as 'graph' | 'smtp',
+  /** template = usa a sequência do banco (determinístico); ai = IA reescreve com base no template (fallback no template). */
+  copyMode: (str('COPY_MODE', 'template') === 'ai' ? 'ai' : 'template') as 'ai' | 'template',
+  /** Valor do site, só para a copy. */
+  sitePrice: str('SITE_PRICE', 'R$1.000'),
 
   /** Teto de segurança global por caixa/dia (cold). 0 = sem teto (vale só a rampa). */
   dailyCap: int('DAILY_CAP', 0),

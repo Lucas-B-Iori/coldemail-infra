@@ -37,9 +37,20 @@ export interface Lead {
   demo_done: number;
   customer_paid: number;
   deal_value: string | null;
+  city: string | null;
+  neighborhood: string | null;
+  phone: string | null;
+  instagram: string | null;
+  maps_rating: number | null;
+  maps_reviews: number | null;
+  site_status: string | null;
+  contact_known: number;
   created_at: string;
   updated_at: string;
 }
+
+const normKey = (k: string): string =>
+  k.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase().replace(/[\s-]+/g, '_');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -56,38 +67,49 @@ export function importLeads(
   const seqId = opts.sequence ? getSequenceId(opts.sequence) : null;
   let added = 0, duplicates = 0, invalid = 0;
   const now = nowIso();
-  for (const r of rows) {
-    const email = (r.email || r['e-mail'] || r.email_profissional || '').trim().toLowerCase();
+  for (const raw of rows) {
+    // cabeçalhos já vêm em minúsculas do parseCsv; normaliza acentos/espaços para aceitar "Avaliações Maps" etc.
+    const r: Record<string, string> = {};
+    for (const [k, v] of Object.entries(raw)) r[normKey(k)] = (v ?? '').trim();
+    const pickCol = (...keys: string[]) => keys.map((k) => r[normKey(k)]).find((v) => v) || null;
+
+    const email = (pickCol('email', 'e-mail', 'email_profissional') || '').toLowerCase();
     if (!EMAIL_RE.test(email)) {
       invalid++;
       continue;
     }
-    const exclude = (r.excluir_contato || '').toLowerCase().trim();
-    if (exclude === 'sim' || exclude === 'true' || exclude === '1') {
-      continue;
-    }
+    const exclude = (pickCol('excluir_contato') || '').toLowerCase();
+    if (exclude === 'sim' || exclude === 'true' || exclude === '1') continue;
 
-    const name = r.contato || r.name || r.nome || email.split('@')[0];
-    const firmName = r.firm_name || r.escritorio || r['escritório'] || null;
-    const cityState = r.city_state || r.cidade_fuso || r.cidade || r['cidade_uf'] || null;
-    const site = r.site || null;
-    const role = r.funcao || r['função'] || r.role || null;
-    const sourceUrl = r.url_origem || r.source_url || null;
-    const practiceArea = r.segmento || r.practice_area || null;
-    const observedFact = r.fato_observado || r.observed_fact || null;
-    const needHypothesis = r.hipotese_necessidade || r.need_hypothesis || null;
-    const fitScore = parseInt(r.pontuacao || r.fit_score || '0', 10) || 0;
-    const variant = r.variante || r.variant || 'modelo_a';
+    const firmName = pickCol('empresa', 'nome_empresa', 'firm_name', 'escritorio');
+    const contact = pickCol('contato', 'nome', 'name');
+    const name = contact || firmName || email.split('@')[0];
+    const city = pickCol('cidade', 'city');
+    const uf = pickCol('uf', 'estado');
+    const cityState = pickCol('city_state', 'cidade_uf') || (city ? (uf ? `${city}/${uf}` : city) : null);
+    const siteStatusRaw = (pickCol('site_status') || '').toLowerCase();
+    const siteStatus = ['nenhum', 'ruim', 'ok'].includes(siteStatusRaw) ? siteStatusRaw : null;
+    const rating = parseFloat((pickCol('nota_maps') || '').replace(',', '.'));
+    const reviews = parseInt((pickCol('avaliacoes_maps') || '').replace(/\D/g, ''), 10);
 
     const res = q.run(
       `INSERT OR IGNORE INTO leads (
          name, email, firm_name, city_state, list_name, sequence_id,
          site, role, source_url, practice_area, observed_fact, need_hypothesis,
-         fit_score, variant, created_at, updated_at
-       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         fit_score, variant, city, neighborhood, phone, instagram, maps_rating, maps_reviews, site_status, contact_known,
+         created_at, updated_at
+       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       name, email, firmName, cityState, opts.list, seqId,
-      site, role, sourceUrl, practiceArea, observedFact, needHypothesis,
-      fitScore, variant, now, now,
+      pickCol('site'), pickCol('funcao', 'role'), pickCol('fonte_url', 'url_origem', 'source_url'),
+      pickCol('segmento', 'practice_area'), pickCol('fato_observado', 'observed_fact'),
+      pickCol('hipotese_necessidade', 'need_hypothesis'),
+      parseInt(pickCol('pontos', 'pontuacao', 'fit_score') || '0', 10) || 0,
+      pickCol('variante', 'variant') || 'modelo_a',
+      city || (cityState ? cityState.split(/[\/,-]/)[0].trim() : null), pickCol('bairro', 'neighborhood'),
+      pickCol('telefone', 'whatsapp', 'phone'), pickCol('instagram'),
+      Number.isFinite(rating) ? rating : null, Number.isFinite(reviews) ? reviews : null,
+      siteStatus, contact ? 1 : 0,
+      now, now,
     );
     res.changes ? added++ : duplicates++;
   }
